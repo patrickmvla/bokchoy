@@ -1,0 +1,42 @@
+{
+  "name": "bokchoy",
+  "private": true,
+  "version": "0.0.0",
+  "description": "BokChoy — game economy backend platform",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "catalog": {
+    "typescript": "^6.0.0",
+    "@types/node": "^22.0.0",
+    "drizzle-orm": "0.45.2",
+    "drizzle-kit": "0.31.10",
+    "postgres": "^3.4.0",
+    "@biomejs/biome": "^2.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "lint:check": "biome ci",
+    "format": "biome format --write",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "check:prepare-false": "bun scripts/check-prepare-false.ts",
+    "clean": "turbo run clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "turbo": "^2.9.0",
+    "typescript": "catalog:",
+    "@types/node": "catalog:",
+    "@biomejs/biome": "catalog:"
+  },
+  "engines": {
+    "bun": ">=1.3.0",
+    "node": ">=22.0.0"
+  },
+  "packageManager": "bun@1.3.3"
+}

@@ -1,0 +1,9 @@
+# Bun workspace config
+# Per [[backend-stack]] — Bun 1.3+ runtime, cross-runtime portability discipline applies
+
+[install]
+# Use bun.lock (text) over bun.lockb (binary) for reviewable diffs in PRs
+saveTextLockfile = true
+
+# Per [[backend-stack]] cross-runtime discipline — postgres-js, not Bun.sql; no Bun.* APIs in non-test source.
+# This file is config-only; the runtime discipline is enforced via ESLint in sub-unit (4).

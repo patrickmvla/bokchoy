@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.bun/
+
+# Build output
+dist/
+build/
+.next/
+.turbo/
+
+# Bun
+# bun.lock is COMMITTED (reproducible installs); only ignore the binary form
+bun.lockb
+
+# TypeScript
+*.tsbuildinfo
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+coverage/
+.nyc_output/
+
+# Logs
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# Postgres data (local docker volume — managed by docker compose, but if mounted local-side accidentally)
+postgres-data/
+
+# Drizzle generated migrations are committed; this is for transient files only
+drizzle/.snapshot.json
+
+# Claude Code user-local config (per-machine; never repo content)
+.claude/
+
+# Bocek session runtime + scratch (never repo content)
+.bocek/mode
+.bocek/preflight-bug-*.md
+.bocek/vault/.compiled/
+.bocek/vault/.bocek/
+
+# Pre-bocek design docs (vault is source of truth for decisions)
+docs/

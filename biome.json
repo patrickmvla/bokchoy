@@ -1,0 +1,68 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!node_modules",
+      "!**/dist",
+      "!**/.turbo",
+      "!packages/db/drizzle",
+      "!.bocek",
+      "!.claude",
+      "!compose"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "style": {
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "bun": "Cross-runtime discipline per [[backend-stack]] + [[frontend-stack]]: use postgres-js, node:crypto, etc. — not bare 'bun' import."
+            },
+            "patterns": [
+              {
+                "group": ["bun:*"],
+                "message": "Cross-runtime discipline per [[backend-stack]] + [[frontend-stack]]: use cross-runtime alternatives — not Bun-specific namespaces (bun:test, bun:sqlite, etc.). Test files override this rule."
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "trailingCommas": "all",
+      "semicolons": "always"
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.test.ts", "**/*.test.tsx", "**/*.spec.ts", "**/*.spec.tsx"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": "off"
+          }
+        }
+      }
+    }
+  ]
+}
