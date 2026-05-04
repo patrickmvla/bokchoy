@@ -1,6 +1,7 @@
 ## Current state
 - **Mode:** implementation
-- **Feature:** bootstrap (sub-units 1, 2, 2.5, 3, 4, 6 COMPLETE; (5) CI scaffold next or jump to first feature)
+- **Feature:** bootstrap COMPLETE — committed + pushed to origin/main 2026-05-04
+- **Bootstrap committed:** initial commit `chore: bootstrap workspace, db package, tooling, and CI` covering 85 files / 12,960 insertions. Pushed to `origin/main` (empty remote → first commit). `.gitignore` filters `.claude/`, `.bocek/mode`, preflight bug notes, stray nested `.bocek/`, `docs/` (pre-bocek design doc — vault is source of truth).
 - **Last resolved:** sub-unit (4) tooling executed end-to-end 2026-05-04 per `[[tooling]]` cascade obligations 1-4. Files written: `biome.json` at root (formatter + linter, `noRestrictedImports` rule blocks `bun` bare + `bun:*` glob, test files override rule off); `scripts/check-prepare-false.ts` cascade-10 scripted check (mirrors cascade-9 FORCE-RLS pattern); `scripts/tsconfig.json` so editor diagnostics resolve; root `package.json` adds `@biomejs/biome` to catalog (`^2.0.0`) + devDeps + `lint`/`lint:fix`/`lint:check`/`format`/`check:prepare-false` scripts. Drizzle config rewritten validate-at-boundary (no more `!` non-null assertion per `idioms/typescript.md`). Empty workspaces (`shared-types`, `auth-config`, `backend`, `cockpit`) got `src/index.ts` placeholders (`export {};`) so tsc has input files. **Verified:** `bun run lint:check` 25 files clean; `bun run typecheck` 5/5 workspaces successful; `bun run check:prepare-false` OK. Biome auto-fixed import sorting in `client.ts` + `index.ts` + `package.json` formatting on first run.
 - **Open thread (cascade obligation 5):** verify GritQL plugin path (a) for cascade-10. Currently using path (b) Bash-style scripted check. GritQL plugin would be more elegant but is unverified at BokChoy's specific shape per `[[tooling-research]]` Q1. Park; revisit when scripted-check noise or maintenance burden warrants.
 - **F1 type-level discipline OPEN THREAD:** branded tx types where RLS-protected table accessors require `TenantTx` from `withTenant` callback. Triggers when first RLS-protected feature schema lands (not in bootstrap scope).
@@ -23,6 +24,11 @@
 - **Open flags:** mailpit `:latest` accepted 2026-05-04; stack still running healthy on port 5433; three errata await one /design pass.
 
 ## Bootstrap sub-unit log
+
+### sub-unit (5) CI scaffold — COMPLETE 2026-05-04
+- File written: `.github/workflows/ci.yml` — `oven-sh/setup-bun@v2` pinned to bun 1.3.3 (matches `packageManager`); steps: install (--frozen-lockfile) + lint:check + typecheck + cascade-10 check; concurrency group cancels in-progress runs per ref. Triggers on push + PR to main.
+- Self-attack: no Postgres service container yet (no integration tests at MVP); add when first feature lands. FORCE-RLS check from `[[backend-stack]]` cascade-9 deferred similarly (no migrations yet).
+- Verified locally before commit: yaml parsed clean; lint:check 25 files clean; typecheck 5/5 workspaces; cascade-10 OK.
 
 ### sub-unit (4) tooling — COMPLETE 2026-05-04
 - Files: `biome.json` (root) + `scripts/check-prepare-false.ts` + `scripts/tsconfig.json` + four workspace `src/index.ts` placeholders + root `package.json` updated (catalog: `@biomejs/biome ^2.0.0`; scripts: `lint`/`lint:fix`/`lint:check`/`format`/`check:prepare-false`) + `packages/db/drizzle.config.ts` rewritten validate-at-boundary.
