@@ -4,10 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "dev": "bun --hot src/index.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo"
   },
-  "dependencies": {},
+  "dependencies": {
+    "hono": "catalog:",
+    "@hono/node-server": "catalog:"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "@types/node": "catalog:"

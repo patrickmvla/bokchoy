@@ -14,6 +14,10 @@
     "apps/backend": {
       "name": "@bokchoy/backend",
       "version": "0.0.0",
+      "dependencies": {
+        "@hono/node-server": "catalog:",
+        "hono": "catalog:",
+      },
       "devDependencies": {
         "@types/node": "catalog:",
         "typescript": "catalog:",
@@ -70,10 +74,12 @@
   },
   "catalog": {
     "@biomejs/biome": "^2.0.0",
+    "@hono/node-server": "^2.0.1",
     "@types/node": "^22.0.0",
     "better-auth": "^1.4.0",
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "0.45.2",
+    "hono": "^4.12.0",
     "postgres": "^3.4.0",
     "typescript": "^6.0.0",
   },
@@ -184,6 +190,8 @@
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
 
+    "@hono/node-server": ["@hono/node-server@2.0.1", "", { "peerDependencies": { "hono": "^4" } }, "sha512-jI9yMDyFpqBeSighf/zlXnQG/nl9AyBc6aAgy4XtxJMyt/CNyJpvPfzDD+bCc2zAOmhhqtF6TnmIaY+xV4mIrw=="],
+
     "@noble/ciphers": ["@noble/ciphers@2.2.0", "", {}, "sha512-Z6pjIZ/8IJcCGzb2S/0Px5J81yij85xASuk1teLNeg75bfT07MV3a/O2Mtn1I2se43k3lkVEcFaR10N4cgQcZA=="],
 
     "@noble/hashes": ["@noble/hashes@2.2.0", "", {}, "sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg=="],
@@ -223,6 +231,8 @@
     "fsevents": ["fsevents@2.3.3", "", { "os": "darwin" }, "sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw=="],
 
     "get-tsconfig": ["get-tsconfig@4.14.0", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA=="],
+
+    "hono": ["hono@4.12.18", "", {}, "sha512-RWzP96k/yv0PQfyXnWjs6zot20TqfpfsNXhOnev8d1InAxubW93L11/oNUc3tQqn2G0bSdAOBpX+2uDFHV7kdQ=="],
 
     "jose": ["jose@6.2.3", "", {}, "sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw=="],
 
