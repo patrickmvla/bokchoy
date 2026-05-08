@@ -27,9 +27,9 @@
 //     fixtures; tests write the rows the M1 functions then mutate.
 //   • packages/db/drizzle/  — migration SQL files; not TS, but defensive.
 //   • node_modules/, dist/, .turbo/  — never scanned.
-//   • packages/wallet/      — when the package lands, it's the wallet-package
-//                              boundary that legitimately wraps the M1 functions.
-//                              NOT YET EXCLUDED — add when the directory exists.
+//   • packages/wallet/      — the wallet-package boundary that legitimately
+//                              wraps the M1 functions (per Part 1 A1).
+//                              Mutations there ARE the M1 path.
 //
 // Per-line opt-out comment for genuine edge cases (e.g., a future migration
 // helper):
@@ -65,7 +65,7 @@ const SQL_RE = new RegExp(
 const DRIZZLE_RE = new RegExp(`\\.(update|insert|delete)\\(\\s*(${TABLE_ALT})\\b`, 'g');
 
 const SCAN_ROOTS = ['apps', 'packages'];
-const EXCLUDE_PREFIXES = ['packages/db/scripts/', 'packages/db/drizzle/'];
+const EXCLUDE_PREFIXES = ['packages/db/scripts/', 'packages/db/drizzle/', 'packages/wallet/'];
 // Skip directories that never contain hand-written source.
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.turbo', 'drizzle']);
 

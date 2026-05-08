@@ -60,6 +60,13 @@
         "typescript": "catalog:",
       },
     },
+    "packages/wallet": {
+      "name": "@bokchoy/wallet",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "catalog:",
+      },
+    },
   },
   "catalog": {
     "@biomejs/biome": "^2.0.0",
@@ -116,6 +123,8 @@
     "@bokchoy/db": ["@bokchoy/db@workspace:packages/db"],
 
     "@bokchoy/shared-types": ["@bokchoy/shared-types@workspace:packages/shared-types"],
+
+    "@bokchoy/wallet": ["@bokchoy/wallet@workspace:packages/wallet"],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 
