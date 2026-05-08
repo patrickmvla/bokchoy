@@ -10,10 +10,17 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "smoke:wrappers": "bun scripts/smoke-wrappers.ts",
     "clean": "rm -rf dist .turbo"
   },
-  "dependencies": {},
+  "dependencies": {
+    "drizzle-orm": "catalog:",
+    "@bokchoy/db": "workspace:*"
+  },
   "devDependencies": {
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "@types/bun": "catalog:",
+    "postgres": "catalog:"
   }
 }

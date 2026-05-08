@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from './client';
 
-type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export async function withTenant<T>(
   db: Db,

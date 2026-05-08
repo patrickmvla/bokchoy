@@ -1,21 +1,33 @@
 // M1 wallet-package boundary per [[wallet-mechanics]] Amendment Part 1 A1.
 //
-// This package is the legitimate location for TS wrappers around the M1
-// stored functions (wallet_credit, wallet_debit, wallet_deidentify_player,
-// bootstrap_project_reason_codes). The rest of the codebase calls these
-// wrappers instead of writing direct SQL against the protected tables
-// (wallets, transactions, currencies, reason_codes, idempotency_keys,
-// loot_rolls, iap_receipts).
+// Public API:
+//   • Four wrappers around the M1 stored functions (wallet_credit, wallet_debit,
+//     wallet_deidentify_player, bootstrap_project_reason_codes) per [[wrapper-shape]].
+//   • WalletError class hierarchy mapped from BCxxx SQLSTATE per [[wrapper-shape]]
+//     Fork 2 (X) — single class, code discriminant, per-code details discriminated
+//     union.
+//   • sqlstateToError pure function — translation lookup, exposed for testing
+//     and for downstream callers that catch their own SQL errors (rare).
 //
-// scripts/check-direct-wallet-mutation.ts excludes this directory; mutations
-// here are the M1 path, not bypasses of it.
+// Mutations of the protected tables (wallets / transactions / currencies /
+// reason_codes / idempotency_keys / loot_rolls / iap_receipts) inside this
+// package are the M1 path, not bypasses. scripts/check-direct-wallet-mutation.ts
+// excludes packages/wallet/.
 //
-// EXPLICITLY OUT OF THIS SLICE (each is its own follow-up):
-//   • TS wrappers around wallet_credit / wallet_debit /
-//     wallet_deidentify_player / bootstrap_project_reason_codes (parameter-
-//     object ergonomics + OTel-span at the call boundary per Part 1 A3
-//     layer 1).
-//   • WalletError class hierarchy + sqlstateToError(code, message) lookup
-//     mapping BCxxx → typed TS errors per Part 1 A5 + A6.
+// OTel-span helper at the call boundary per [[wallet-mechanics]] Amendment
+// Part 1 A3 layer 1 — DEFERRED. Wrapper bodies have a TODO(otel) marker;
+// wiring lands when the SDK choice is pinned alongside the first apps/backend
+// route that needs span correlation.
 
-export {};
+export {
+  type BootstrapProjectReasonCodesParams,
+  bootstrapProjectReasonCodes,
+} from './bootstrap-project-reason-codes';
+export { type BcCode, type ErrorDetails, WalletError } from './errors';
+export { sqlstateToError } from './sqlstate-to-error';
+export { type WalletCreditParams, walletCredit } from './wallet-credit';
+export { type WalletDebitParams, walletDebit } from './wallet-debit';
+export {
+  type WalletDeidentifyPlayerParams,
+  walletDeidentifyPlayer,
+} from './wallet-deidentify-player';
