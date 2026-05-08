@@ -10,6 +10,306 @@ confidence: high
 
 Resolves **CL-029** in `[[design-claims-register]]`. Cascades to every wallet-mutating endpoint, the loot-roll engine (CL-031), the IAP fulfillment path, the faucet/drain dashboard, and the customer-facing privacy policy. Falsifies DESIGN.md §12.2's "event-sourced transactions" framing — replaced with path B per `[[wallet-source-of-truth-research]]` after triangulation against PlayFab Economy v2, Beamable, LootLocker, AWS in-game-currency reference. Closes the cascade obligations from `[[idempotency-strategy]]` for `staged_jobs` schema.
 
+## Amendment 2026-05-04 — M2 → M1, SERIALIZABLE → READ COMMITTED + FOR UPDATE, OTel-from-plpgsql → three-layer realistic mechanism, single-vs-double-entry deliberate-divergence vaulted
+
+Per `[[wallet-functions-research]]` (Q3 of the wallet gap-cluster /research queue, source-walked `pgr0ss/pgledger@b3143a3` + Postgres 16 docs + multi-tenant SaaS contradiction probe), the original 2026-05-02 entry's **§2 M2 cite chain was falsified at tier 1**: pgledger does NOT ship SECURITY DEFINER + role-based REVOKE — it is M1 (app-library + ergonomic discipline) with zero `GRANT/REVOKE/CREATE ROLE` across the entire repo and direct `UPDATE pgledger_accounts` shown as normal usage in `examples/lock-account.sql`. M2 (the privilege-barrier mechanism) had no surveyed production cite for ledger code. Per *Source quality ladder*, tier-1 production cite (M1: Brandur + Square Books + pgledger) beats tier-2 docs-cited novel synthesis (M2: Postgres 16 SECURITY DEFINER + REVOKE/GRANT pattern, well-documented but unpublished for ledgers).
+
+Four amendments land:
+
+### A1. §2 mechanism: M2 → M1 (functions stay; privilege barrier removed)
+
+Stored functions remain (they are a useful ergonomic API surface and provide FOR UPDATE row-locking + idempotency-replay shape for free). They become **SECURITY INVOKER** (Postgres default, pgledger pattern), not SECURITY DEFINER. The application role `bokchoy_app` retains direct `UPDATE`/`INSERT`/`DELETE` privileges on `wallets`/`transactions`/`loot_rolls`/`iap_receipts`. The function set is the *convenient and blessed* path; direct table mutation is not blocked at the privilege level.
+
+`bokchoy_admin` / `bokchoy_app` role separation **survives** under M1 because it serves a separate purpose — `bokchoy_admin` owns DDL and runs migrations, `bokchoy_app` runs runtime queries. The role split was load-bearing for migration discipline before; it remains load-bearing for migration discipline now. What changes is that `bokchoy_app` is no longer SELECT-only on the protected tables.
+
+**M1's bypass-protection failure mode** (engineer adds a parallel mutation path bypassing the WalletService library) is mitigated by:
+- **CI lint** — new scripted check `scripts/check-direct-wallet-mutation.ts` (extends the pattern of cascade-9 FORCE-RLS + cascade-10 `prepare: false`) that greps `apps/backend/**/*.ts` for `UPDATE wallets`/`INSERT INTO transactions`/`UPDATE loot_rolls`/`UPDATE iap_receipts`/`DELETE FROM (wallets|transactions|loot_rolls|iap_receipts)` patterns inside `sql\`...\`` template literals; fails build on hits outside the wallet-package boundary (path TBD with implementation, likely `packages/wallet/`).
+- **Code review discipline** on PRs touching wallet writes.
+- **Test discipline** — integration tests assert that the function path is the only path exercising the protected behavior.
+
+**M1→M2 upgrade migration is preserved as a future option** if (a) team grows past 5 engineers touching wallet code, (b) GRANT-migration drift causes a real incident, or (c) compliance regime demands structural privilege barriers. The migration is one ALTER per function (`SECURITY DEFINER`), one role-grant migration (REVOKE UPDATE on protected tables from `bokchoy_app`, GRANT EXECUTE on functions), `SET search_path` hardening per Postgres 16 docs §sql-createfunction. Function bodies, signatures, and TS call sites are unchanged. Defer until trigger fires.
+
+§2's **plpgsql function set survives the amendment** in shape — `wallet_credit`, `wallet_debit`, `inventory_grant`, `inventory_consume`, `wallet_deidentify_player`. The `SECURITY DEFINER` keyword on each is removed (becomes default SECURITY INVOKER). The example signatures in §2 lose `SECURITY DEFINER` but otherwise stand. The `wallet_deidentify_player` function in §6 also loses SECURITY DEFINER + the search_path hardening.
+
+### A2. *Engineering substance applied* line 466: SERIALIZABLE → READ COMMITTED + FOR UPDATE
+
+The original SERIALIZABLE commitment was inherited from the (now-falsified) M2 framing. Pgledger source-walk: `pgledger_create_transfers` uses default `READ COMMITTED` isolation + explicit `FOR UPDATE` row-locking with sorted-then-locked deadlock prevention (S1 lines 211–226 of the pinned commit). Per `[[wallet-functions-research]]` D2 derivation:
+
+- BokChoy MVP scale (~3 peak writes/sec/project per `[[idempotency-strategy]]` F12) makes contention ~zero — SERIALIZABLE's stronger guarantees would never be exercised in practice.
+- BokChoy's `wallet_credit/wallet_debit` lock exactly one wallet row per call. The "many tables, unpredictable order" failure mode SERIALIZABLE protects against doesn't exist in this design.
+- FOR UPDATE is *self-documenting at the function-body level* (the lock acquisition is visible in the source); SERIALIZABLE relies on the caller's transaction setting and is invisible to readers of the function alone.
+- TS callers under D2b have no retry budget and no `40001 serialization_failure` handling — they receive typed `BCxxx` SQLSTATEs and dispatch by code.
+
+**§2's `wallet_credit`/`wallet_debit` function bodies:** lock the wallet row via `SELECT * FROM wallets WHERE id = p_wallet_id AND project_id = p_project_id FOR UPDATE` after the tenant-context check and before the balance update. Per pgledger pattern.
+
+**Future per-function isolation upgrade is preserved** — if a future endpoint touches multiple rows in patterns FOR UPDATE doesn't catch, that endpoint can independently set `transaction_isolation = 'serializable'` and add caller-side retry. Per-function isolation choice; not all-or-nothing.
+
+### A3. *Engineering substance applied* line 468: OTel-from-plpgsql → three-layer realistic mechanism
+
+The original line 468 commits to *"structured logging via OpenTelemetry from the wallet-mutation function."* Per `[[wallet-functions-research]]` F4 #5: no production cite ships plpgsql→OTel emission; pgledger ships zero observability primitives inside the function. The commitment as written requires building infrastructure that doesn't exist.
+
+Replacement, three layers:
+
+1. **OTel span at the TS call boundary.** Every `db.execute(sql\`SELECT wallet_credit(...)\`)` is wrapped in an OTel span with attributes: `db.system=postgresql`, `db.operation=wallet_credit`, `bokchoy.project_id`, `bokchoy.wallet_id`, `bokchoy.amount`, `bokchoy.currency_id`, `bokchoy.reason_code`. Span captures duration + outcome (success / SQLSTATE on failure). Canonical OTel-TS pattern; no novel infrastructure.
+2. **`RAISE LOG` from inside plpgsql** for events the TS layer can't see — idempotency-replay hit, allow_negative_balance constraint check edge cases, etc. Format: `RAISE LOG 'wallet_credit: idempotency_replay project=% wallet=% source_event=% prior_txn=%', p_project_id, p_wallet_id, p_source_event_id, v_existing_id`. Postgres server-log destination; captured by deployment log infra (Supabase log explorer / RDS CloudWatch / Vector). Structured key=value format consumable by log-search tooling.
+3. **`pg_stat_statements`** (already committed in original *Engineering substance applied* paragraph) for function-level slow-query analysis at the SQL boundary.
+
+This is what's actually feasible. No new infrastructure required.
+
+### A4. §3 single-entry vs double-entry: deliberate-divergence vaulted
+
+Per `[[wallet-functions-research]]` F5. BokChoy ships single-entry on `transactions` (each row is one credit OR debit; no paired counter-row). Pgledger and traditional double-entry ledger systems require paired credit + debit rows summing to zero per currency. The divergence is intentional: virtual currency is **created and destroyed by the system** — IAP credits gold from "outside" the closed economy; loot pulls debit gold to "outside"; daily-login bonuses generate currency from nothing. Pure double-entry would require materializing pseudo-accounts (`system.iap_inflow_USD`, `system.shop_outflow_gems`) for every system-initiated movement — schema overhead plus ~2× row count on `transactions` for no auditable benefit at game-economy scale. Real-money ledgers (pgledger, Stripe Ledger, banking systems) require double-entry because every dollar must be conserved in the closed system; virtual currency is a different conservation regime.
+
+Vaulted here so future readers don't try to "fix" the missing counter-rows.
+
+### A5. Custom SQLSTATE convention pinned: `BC` namespace
+
+Postgres 16 §38.6.5 permits any 5-character SQLSTATE in `RAISE EXCEPTION ... USING ERRCODE`. Pgledger uses default `RAISE EXCEPTION 'msg %, %'` which falls back to `P0001` (raise_exception) — TS clients pattern-match on message strings, brittle. BokChoy commits to a `BC` 2-char class (BokChoy-namespace; unreserved by SQL standard or Postgres docs §A.1). Pinned codes for the wallet primitive:
+
+- `BC001` IdempotencyKeyInUse — concurrent in-flight request with same `(project_id, idempotency_key)`. Maps to HTTP 409 per `[[idempotency-strategy]]`.
+- `BC002` IdempotencyKeyMismatch — same `(project_id, idempotency_key)` with different request body. Maps to HTTP 422 per `[[idempotency-strategy]]`.
+- `BC010` InsufficientFunds — debit would breach allow_negative=false on the wallet (or table-level `CHECK (balance >= 0)`). Maps to HTTP 422 with body `{error: 'insufficient_funds', wallet_id, requested, available}`.
+- `BC020` TenantMismatch — `current_setting('app.current_tenant')::UUID` differs from `p_project_id` parameter. Defense-in-depth check; should never fire in well-formed callers. Maps to HTTP 500 (caller bug).
+- `BC021` WalletNotFound — `p_wallet_id` lookup miss within tenant scope.
+- `BC022` CurrencyMismatch — wallet's `currency_id` differs from `p_currency_id` parameter.
+- `BC030` PolicyViolation — catch-all for non-debit allow_negative/allow_positive breaches (e.g., crediting a frozen wallet).
+
+Function bodies use `RAISE EXCEPTION 'InsufficientFunds: wallet=% requested=% available=%', ... USING ERRCODE = 'BC010'`. TS layer dispatches by `error.code === 'BC010'`. Stable across function-body refactors. Reserved range `BC000-BC099` for the wallet/inventory primitives; future expansion (loot, IAP, mailbox, etc.) gets `BC100+` blocks per cascade obligation amendment when those features land.
+
+### A6. Cascade obligations updated
+
+- **CI lint #5 in *Cascade obligations*** is amended to add the M1-bypass detection script (`scripts/check-direct-wallet-mutation.ts`). The original M2 GRANT-migration scan obligation is removed (no longer applicable; no GRANT migrations to scan under M1).
+- **OTel mechanism cascade** added: TS-side OTel-span helper in the wallet-package boundary; Postgres-server-log structured-format convention documented for `RAISE LOG` lines.
+- **SQLSTATE convention cascade** added: TS-side error-class hierarchy (`WalletError` base + `InsufficientFundsError extends WalletError` etc.) mapped from BCxxx codes via a pure-function `sqlstateToError(code, message)` lookup. Pinned at `packages/db/src/wallet-errors.ts` (path TBD).
+
+### A7. Failure mode 1 amended
+
+Original Failure mode 1 (`GRANT UPDATE` privilege drift on wallet tables) is amended:
+- Under M1, there's no privilege barrier to drift. The failure mode reverts to the M1 class: *"an engineer adds a parallel mutation path bypassing the wallet-package boundary."* Probability medium during code-base growth; cost medium (audit-row-less mutations possible).
+- Mitigation: CI lint per A1 above; code review discipline; integration tests assert the function path is exercised.
+- Original mitigation (CI lint script greps migrations for `GRANT UPDATE`) is removed — no GRANT changes to scan.
+
+### Confidence note on the amendment
+
+The M1 commit is **production-cited tier 1** (Brandur + Square Books + pgledger). Confidence: high. The D2b concurrency commit is **production-cited tier 1** (pgledger source-walked) — confidence high on the technique; medium on the technique-as-validated at BokChoy's Studio+ projection (~575 writes/sec/project, no public benchmark surveyed). The OTel three-layer mechanism is **docs-cited + first-principles** — confidence medium-high (each layer is canonical OTel-TS / canonical Postgres logging / canonical pg_stat_statements; combined into a single observability story for BokChoy's specific shape). The SQLSTATE BC namespace is **docs-cited tier 2** with confidence high (Postgres 16 §38.6.5 explicitly permits any 5-char code; the BC choice is convention, not standards-bearing).
+
+The original entry's body sections below (§1–§8, *Reasoning*, *Engineering substance applied*, *Production-grade gates*, *Rejected alternatives*, *Customer-facing contract obligations*, *Failure modes*, *Mitigations summary*, *Idiom citations*, *Revisit when*, *Cascade obligations*) **stand as written except where this amendment supersedes**. Specifically: §2's "no UPDATE privilege" claim is superseded by A1; §6's `wallet_deidentify_player` SECURITY DEFINER + search_path hardening is removed by A1; *Engineering substance applied* lines 466 + 468 are superseded by A2 + A3; *Failure mode 1* is amended per A7; *Cascade obligations* #5 + #6 are amended per A6.
+
+## Amendment 2026-05-04 (Part 2) — Q1 type-system reconciliation per `[[tenancy-ids-research]]`
+
+Per `[[tenancy-ids-research]]` (Q1 + Q2 of the wallet gap-cluster /research queue, 2026-05-04). Q1 (G1) resolved: `players.id` is **UUID** per `[[player-auth]]` §2 — production-cited tier 1 across Supabase Auth + multi-tenant SaaS canonical pattern; BIGSERIAL rejected on enumeration-attack class; prefixed-text rejected on Postgres-stack RLS-GUC-cast fit. The original 2026-05-02 entry's `player_id BIGINT NOT NULL` references in §3, §5, §6 were inherited from a stale framing pre-`[[player-auth]]`. Five amendments land:
+
+### A8. §3 `transactions.player_id` BIGINT → UUID
+
+The `transactions` table column `player_id BIGINT NOT NULL` (per §3 line 62 of original) becomes `player_id UUID NOT NULL`. Index `idx_transactions_player_lookup ON transactions (player_id, created_at DESC)` carries through unchanged (Postgres B-tree indexes UUID natively, no rewrite needed).
+
+### A9. §5 sister-table `player_id` columns BIGINT → UUID
+
+- `loot_rolls.player_id BIGINT NOT NULL` → `UUID NOT NULL`.
+- `iap_receipts.player_id BIGINT NOT NULL` → `UUID NOT NULL`.
+
+`loot_rolls.seed_inputs JSONB` content per `[[loot-rng-construction]]` includes `player_id` — the JSONB field carries the UUID string-form (with dashes per RFC 9562) rather than 8-byte BIGINT-encoded. **Cascades to `[[loot-rng-construction]]` canonical-form hybrid A+B serialization:** the `player_id 8B` field in the seed format becomes `player_id 16B` (UUID raw bytes). This is a cascade obligation against `[[loot-rng-construction]]`, listed below.
+
+### A10. §6 `wallet_deidentify_player` signature + HMAC→UUIDv8 projection
+
+Function signature: `wallet_deidentify_player(p_player_id BIGINT)` → `wallet_deidentify_player(p_player_id UUID)`. Return type unchanged (`INTEGER`, count of rows touched).
+
+The §6 plpgsql body's HMAC→bigint projection (lines reading `(('x' || encode(substring(hash_full FROM 1 FOR 8), 'hex'))::bit(63))::bigint`) is replaced with a deterministic-from-HMAC **UUIDv8 projection** per RFC 9562 §5.8 (UUIDv8 is the spec-defined version for app-specific deterministic UUIDs; v4 reserved for randomly-generated; using v4 for a deterministic UUID is a misuse of the spec):
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+CREATE FUNCTION wallet_deidentify_player(p_player_id UUID)
+RETURNS INTEGER  -- count of rows touched
+LANGUAGE plpgsql
+-- (per Amendment Part 1 A1: SECURITY DEFINER + search_path hardening removed under M1)
+AS $$
+DECLARE
+  k_text       TEXT  := current_setting('bokchoy.anon_secret', false);  -- error if unset
+  hash_full    BYTEA;
+  hash_16      BYTEA;
+  anon_id      UUID;
+  rows_touched INTEGER := 0;
+BEGIN
+  IF length(k_text) < 32 THEN
+    RAISE EXCEPTION 'bokchoy.anon_secret missing or too short (need >= 32 chars)'
+      USING ERRCODE = 'BC040';  -- new SQLSTATE: ConfigurationError, see Amendment Part 1 A5
+  END IF;
+
+  -- HMAC-SHA-256 of player_id keyed by the de-id secret.
+  -- Project to UUIDv8 (RFC 9562 §5.8): 16 bytes of HMAC output, with
+  -- byte 6 version bits forced to 1000 (v8) and byte 8 variant bits forced to 10.
+  hash_full := hmac(
+    convert_to(p_player_id::text, 'UTF8'),
+    convert_to(k_text,            'UTF8'),
+    'sha256'
+  );
+  hash_16 := substring(hash_full FROM 1 FOR 16);
+  hash_16 := set_byte(hash_16, 6, (get_byte(hash_16, 6) & 15)  | 128);  -- version 8: 1000xxxx
+  hash_16 := set_byte(hash_16, 8, (get_byte(hash_16, 8) & 63)  | 128);  -- variant 10: 10xxxxxx
+  anon_id := encode(hash_16, 'hex')::uuid;
+
+  -- transactions: replace player_id, scrub PII metadata fields
+  UPDATE transactions
+    SET player_id = anon_id,
+        metadata  = metadata - 'ip' - 'device_id' - 'email_hash' - 'session_id'
+    WHERE player_id = p_player_id;
+  GET DIAGNOSTICS rows_touched = ROW_COUNT;
+
+  -- loot_rolls: replace player_id, scrub seed_inputs (player_id is the seed input)
+  UPDATE loot_rolls
+    SET player_id   = anon_id,
+        seed_inputs = jsonb_set(seed_inputs, '{player_id}', to_jsonb(anon_id))
+    WHERE player_id = p_player_id;
+
+  -- iap_receipts: replace player_id, NULL out raw receipt
+  UPDATE iap_receipts
+    SET player_id           = anon_id,
+        raw_receipt         = NULL,
+        validation_response = validation_response - 'transaction_id' - 'original_transaction_id' - 'app_account_token'
+    WHERE player_id = p_player_id;
+
+  -- staged_jobs: scrub player-identifying fields across ALL statuses
+  UPDATE staged_jobs
+    SET payload = payload - 'player_id' - 'email' - 'device_id'
+    WHERE (payload->>'player_id')::UUID = p_player_id;
+
+  RETURN rows_touched;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION wallet_deidentify_player(UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION wallet_deidentify_player(UUID) TO bokchoy_app;
+```
+
+The `staged_jobs` cleanup query's cast becomes `::UUID` (was `::BIGINT`).
+
+**Determinism + collision math:** The UUIDv8 derived from HMAC-SHA-256 carries 122 bits of effective entropy in the data field (16 bytes minus 4 version bits minus 2 variant bits = 122 bits of HMAC-derived value). Birthday collision N²/2¹²² ≈ **5×10⁻²⁰ at 1B distinct player_ids** — functionally zero at any plausible BokChoy scale. The original §6 *Anon_id collision math* paragraph documenting BIGINT-projection collision probability (5×10⁻⁸ at 1M, 5×10⁻⁴ at 100M, 5×10⁻² at 1B) is **retired**; replaced with: *"Anon_id collision math (UUIDv8 projection of HMAC-SHA-256). 122 random bits in the v8 data field; birthday collision N²/2¹²² is functionally zero at any plausible BokChoy scale (≈ 5×10⁻²⁰ at 1B players). No scale-driven Revisit-when trigger applies."*
+
+**Why UUIDv8 not v4-shape:** RFC 9562 §5.4 defines v4 as randomly or pseudo-randomly generated. BokChoy's anon_id is *deterministic from `(player_id, anon_secret)`* — using v4 format misattributes the column's nature. RFC 9562 §5.8 explicitly designates v8 for *experimental or vendor-specific use cases* with the only requirement being correct version + variant bits. v8 is the spec-correct shape; one byte differs in the SQL (`(... & 15) | 128` for v8 vs `(... & 15) | 64` for v4). Same collision profile. Same Postgres `uuid` type acceptance. Internal-only column (anon_ids never leave BokChoy's database) so legacy-tool-recognition concerns are moot.
+
+### A11. *Revisit when* "10M player count" trigger retired
+
+The original *Revisit when* entry: *"Projected player count per project exceeds 10M. Anon_id BIGINT-projection collision math becomes meaningful (~5×10⁻⁴ at 100M, ~5×10⁻² at 1B). Upgrade `player_id` columns to `bytea` (full HMAC-SHA-256 output) or per-project-salted bigint."*
+
+**Retired wholesale.** UUIDv8 width has no plausible-scale collision concern; the threshold this trigger watched for is functionally unreachable. Replace with no successor trigger.
+
+### A12. Cascade obligations from Q1 type changes
+
+- **`[[loot-rng-construction]]` canonical-form hybrid A+B serialization** must amend `player_id 8B` → `player_id 16B`. The seed-bytes derivation changes shape; HMAC_DRBG output is unaffected (the seed-bytes width change doesn't break the PRF determinism). Open thread on `[[loot-rng-construction]]`.
+- **`[[player-auth]]` §6 DSR primitives** — `bokchoy.player_export(p_player_id UUID)` and `bokchoy.player_erase(p_player_id UUID)` already match `[[player-auth]]` §2's UUID type; no change needed there. Confirms consistency.
+- **`apps/auth-config` Better Auth instance configuration** must include `advanced.database.generateId: "uuid"` per `[[tenancy-ids-research]]` F1. Without this setting, Better Auth generates 32-char alphanumeric TEXT IDs and the entire RLS GUC chain breaks at the `current_setting('app.current_tenant')::UUID` cast. Cascade obligation: `apps/auth-config/src/index.ts` (or wherever the Better Auth instance is defined) sets this option in the config object passed to `betterAuth({...})`.
+- **Drizzle table definitions for the auth schema** must hand-translate Better Auth's organization plugin tables (`organization`, `member`, `invitation`, `team`, `teamMember`, `organizationRole`) with `id` typed as Drizzle `uuid('id').primaryKey().defaultRandom()`. Better Auth's `getMigrations` doesn't support Drizzle adapter per `[[backend-stack]]`; hand-translation is the path. Cascade obligation: `packages/db/src/schema/auth.ts` (or equivalent) holds the Drizzle definitions.
+- **`[[wallet-functions-research]]` operational-implications template** uses `p_player_id UUID` in the `wallet_credit/wallet_debit` signatures already. No change there; the template was forward-aware of Q1 resolution.
+
+### A13. UUID variant: UUIDv4 today, defer UUIDv7
+
+Per `[[tenancy-ids-research]]` D6 derivation: `gen_random_uuid()` (Postgres-native, generates v4) for column defaults; `crypto.randomUUID()` (Node.js stdlib, generates v4) for app-side ID generation in Better Auth via `advanced.database.generateId: "uuid"`. UUIDv7 is preferred for B-tree insert locality at scale (~49% faster inserts, ~25% smaller index per the mblum.me benchmark on Postgres 15) but Postgres 17 (BokChoy's current per `[[local-docker]]`) doesn't ship native `uuidv7()`; transcribing pgledger's `pgledger_uuidv7_microsecond()` SQL helper would buy v7 today at the cost of carrying ~10 lines of vendored SQL that needs to be remembered + replaced when native arrives.
+
+**Decision:** UUIDv4 today; defer UUIDv7. Migration is cheap when it lands (column-default change + new-rows-land-at-right-edge of B-tree; no data migration; old v4 rows stay frozen).
+
+**Revisit when:**
+- Supabase managed Postgres ships Postgres 18 (native `uuidv7()` available) → upgrade defaults in a single migration.
+- Sustained write rate on `transactions` exceeds 100 writes/sec for any project (one order of magnitude above indie tier-3 baseline) AND Postgres 18 not yet on Supabase managed → transcribe pgledger's SQL helper and upgrade defaults.
+
+Both triggers are cheap to monitor: Trigger 1 is a Supabase changelog watch; Trigger 2 is checked via the Prometheus metric on `transactions` row growth committed in *Engineering substance applied*. **Vault `[[tenancy-ids-research]]` D6b (UUIDv7-today via vendored SQL helper) as rejected alternative with named winning condition: revisit if Supabase Postgres 18 timeline becomes published and ≥12 months out at vault-write time, in which case shipping the helper today delivers ~12 months of locality benefit before native arrives.**
+
+### Confidence note on Part 2
+
+Q1 commit (UUID for player_id) is **production-cited tier 1** (Supabase Auth `auth.users.id UUID` + multi-tenant SaaS canonical pattern + Better Auth UUID config option). Confidence: high.
+
+UUIDv4-today deferral is **docs-cited** (Postgres B-tree behavior under mixed-monotonic-and-random inserts is well-established) with confidence high on the migration-cheapness claim.
+
+UUIDv8 projection is **spec-correct per RFC 9562 §5.8** (May 2024). Confidence: high on the spec correctness; medium-high on the deterministic-UUID-as-v8 *being the production-recognized pattern* — the RFC is recent (1.5 years old as of vault-write); production-cited examples of v8 in deployed systems are sparse in surveyed sources. The internal-only nature of BokChoy's anon_id (never leaves the database) caps the downside risk at "future-internal-tool may not parse v8" which is mitigated by Postgres `uuid` type accepting v8 byte-pattern as a valid UUID for storage and equality comparison.
+
+Q1 amendments supersede:
+- §3 `transactions.player_id BIGINT` → UUID (per A8).
+- §5 `loot_rolls.player_id BIGINT`, `iap_receipts.player_id BIGINT` → UUID (per A9).
+- §6 `wallet_deidentify_player(BIGINT)` signature + HMAC→bigint projection → `(UUID)` + HMAC→UUIDv8 projection (per A10).
+- §6 *Anon_id collision math* paragraph retired and replaced (per A10).
+- *Revisit when* "10M player count" trigger retired (per A11).
+- *Cascade obligations* extended with Better Auth config + Drizzle auth-schema hand-translation + `[[loot-rng-construction]]` seed-format amendment (per A12).
+- New cascade item: UUIDv4→v7 migration triggers (per A13).
+
+## Amendment 2026-05-04 (Part 3) — Wallet-feature schema completion per `[[idempotency-keys-schema-research]]` + `[[economy-primitives-research]]`
+
+Per `[[idempotency-keys-schema-research]]` (Q4 of the wallet research queue) + `[[economy-primitives-research]]` (Q5+Q6+Q7 bundled, 2026-05-04). The research queue surfaced four cross-cutting wallet-feature schemas the original 2026-05-02 entry referenced via FK or naming but did not enumerate: `idempotency_keys`, `currencies`, `wallets`, `reason_codes`. /design Part 3 picks the contested options (D11+D12) and applies the schemas as cascade against §3.
+
+### A14. `idempotency_keys` schema — D11.1 + D11.2 picks
+
+Schema synthesis lives in `[[idempotency-keys-schema-research]]` F6. Picks:
+
+- **D11.1 — `request_params JSONB NOT NULL`** (Brandur shape) over body-hash fingerprint (Shopify shape). Reasoning: storage cost bounded by 24h TTL × write rate; canonical-JSON discipline cost real and ongoing; storage savings (~6× at Studio+) target a non-dominant cost line item. Migration to fingerprint preserved per-endpoint if Studio+ storage becomes load-bearing.
+- **D11.2 — `locked_at TIMESTAMPTZ NULL`** (NULL-until-locked) over Brandur's `DEFAULT now()`. Reasoning: D2-α drops the `recovery_point` column that Brandur's default-now relied on for state-disambiguation; under D2-α, NULL-until-locked + `completed_at NOT NULL` makes state derivable from columns alone (self-documenting). Race-window mitigated via `INSERT ... ON CONFLICT (project_id, idempotency_key) DO NOTHING RETURNING id` Postgres-native pattern.
+
+Full schema in `[[idempotency-keys-schema-research]]` F6. Hourly reaper via `staged_jobs` (`kind='idempotency_reaper'`) — extends `[[wallet-mechanics]]` §4 staged_jobs CHECK constraint to include the new kind.
+
+### A15. `currencies`, `wallets`, `reason_codes` schemas — D12 pick
+
+- **D12 — R3 (per-project allowlist)** over R2 (open TEXT). Reasoning: Month 6 faucet/drain dashboard depends on reliable grouping; FK to `reason_codes(project_id, code)` lifts spelling-drift defense to write-time once vs query-time forever. R1 (closed CHECK enum) ruled out by `[[economy-primitives-research]]` F1 — F2P backends do not ship closed reason-code enums, Stripe's pattern is fintech-context.
+
+Full schemas in `[[economy-primitives-research]]`:
+- **F3** `currencies(id UUID PK, project_id UUID FK, code TEXT 1-16 alphanumeric+underscore, display_name, description, decimals SMALLINT 0-8, is_premium BOOLEAN, is_tradable BOOLEAN, created_at, updated_at)` UNIQUE(project_id, code). Cap/regen/soft-cap explicitly out-of-MVP.
+- **F4** `wallets(id UUID PK, project_id UUID, player_id UUID, currency_id UUID FK, balance NUMERIC(20,4) DEFAULT 0 CHECK >= 0, version BIGINT, allow_negative_balance BOOLEAN, created_at, updated_at)` UNIQUE(project_id, player_id, currency_id). Pgledger row-per-`(player, currency)` pattern; lazy-create on first credit via `INSERT ... ON CONFLICT DO NOTHING`.
+- **F6** `reason_codes(project_id UUID, code TEXT CHECK '^[a-z][a-z0-9_]{0,63}$', display_name, category TEXT CHECK 'faucet|drain|transfer|admin', is_system BOOLEAN, created_at)` PK(project_id, code).
+
+Bootstrap default-set ships at project creation (12 codes per F6): faucets `signup_bonus`, `daily_login`, `quest_reward`, `loot_pull_reward`, `shop_purchase_grant`, `iap_grant`, `compensation`, `admin_grant`; drains `loot_pull_cost`, `shop_purchase_cost`, `crafting_cost`, `admin_debit`. All `is_system=TRUE`. Customer extensions get `is_system=FALSE`.
+
+### A16. `transactions` table — column additions to §3
+
+Two new columns added to the original §3 `transactions` schema:
+
+- **`wallet_version BIGINT NOT NULL`** — pgledger forensic-version pattern (`pgledger_entries.account_version` per `[[wallet-functions-research]]` F3). Server-populated from `wallets.version` after the increment, inside the `wallet_credit/wallet_debit` function body. <8 bytes/row at the row-count projection (240M rows × 24 months); ~2GB total at Studio+ scale. Buys forensic reconstruction: "what version of the wallet did this audit row observe?"
+- **`reason_code TEXT NOT NULL`** stays declared — but **adds composite FK** `FOREIGN KEY (project_id, reason_code) REFERENCES reason_codes(project_id, code) ON DELETE RESTRICT`. The CHECK constraint on `reason_code` (none in original §3) is replaced by the FK referential integrity. Spelling drift caught at write-time.
+
+§3 partition strategy unchanged — monthly partitioning on `created_at` continues; FKs work across partitioned tables (Postgres 11+).
+
+### A17. Cascade obligations updated
+
+Adding/amending obligations on the existing list:
+
+- **CI lint extension** (per Amendment Part 1 A1) — `scripts/check-direct-wallet-mutation.ts` greps for direct mutation on `currencies`, `wallets`, `reason_codes`, `idempotency_keys` in addition to the original protected tables.
+- **Drizzle schema definitions** for `currencies`, `wallets`, `reason_codes`, `idempotency_keys` in `packages/db/src/schema/wallet.ts` (or split per-table).
+- **Bootstrap default-set on project creation** — function or trigger or app-side after-insert hook on `projects` inserts the 12 baseline reason codes with `is_system=TRUE`. Implementation choice deferred to /implementation; the data is fixed.
+- **`staged_jobs` CHECK constraint** amends to add `'idempotency_reaper'` kind.
+- **SDK auto-key generation** — `bokchoy-sdk-retry-${uuid4()}` for retry-eligible POST/DELETE without caller-supplied key. Match Stripe pattern per `[[idempotency-keys-schema-research]]` F5.
+- **Customer reason-code CRUD endpoint** — deferred to Month 4+ when cockpit primitives land. MVP customers use the 12 bootstrap codes.
+
+### A18. New SQLSTATEs (extend BCxxx convention from Part 1 A5)
+
+Function bodies now emit:
+
+- **BC050 ReasonCodeNotRegistered** — `transactions.reason_code` doesn't exist in `reason_codes` for this project. FK violation; Postgres raises 23503; function may catch and re-raise as `BC050` for typed TS-side handling, or let 23503 propagate and TS dispatches on it directly. Decision deferred to /implementation; both work.
+- **BC060 CurrencyNotFound** — `wallet_credit/wallet_debit` p_currency_id doesn't exist or doesn't belong to p_project_id. Defense-in-depth on top of FK constraint.
+
+Allocations within BCxxx range (Part 1 A5 + Part 2 A10 + Part 3 A18):
+- BC001/BC002 idempotency.
+- BC010 InsufficientFunds.
+- BC020/BC021/BC022 tenant/wallet/currency mismatch.
+- BC030 PolicyViolation (allow_negative/allow_positive breaches).
+- BC040 ConfigurationError (de-id secret missing).
+- BC050 ReasonCodeNotRegistered.
+- BC060 CurrencyNotFound.
+
+Reserved range BC000-BC099 for wallet/inventory/idempotency primitives. Future features (loot, IAP, mailbox) get BC100+ blocks.
+
+### Confidence note on Part 3
+
+D11 picks (JSONB + NULL-until-locked) are **production-cited tier 1 + docs-cited tier 2** synthesis (Brandur source + Shopify docs + Postgres ON CONFLICT pattern). Confidence: high.
+
+D12 pick (R3 per-project allowlist) is **synthesized** — no surveyed F2P backend ships exactly R3 publicly (PlayFab/LootLocker show R2). The synthesis is justified by Month 6 faucet/drain dashboard reliability requirement, which is BokChoy-specific. Confidence: medium-high on the synthesis; high on the requirement-driven justification.
+
+Schema cross-references to research entries keep this amendment short. The full SQL schemas live in:
+- `[[idempotency-keys-schema-research]]` F6 (`idempotency_keys`).
+- `[[economy-primitives-research]]` F3 (`currencies`), F4 (`wallets`), F6 (`reason_codes`).
+
+Q4+Q5+Q6+Q7 amendments supersede:
+- §3 `transactions` schema gains `wallet_version BIGINT NOT NULL` column + composite FK on `(project_id, reason_code) → reason_codes`.
+- §4 `staged_jobs` CHECK constraint gains `'idempotency_reaper'` kind (Part 3 A17).
+- `[[idempotency-strategy]]` *Engineering substance applied* deferral on schema specifics is now closed by F6 in `[[idempotency-keys-schema-research]]`.
+- *Cascade obligations* extended per Part 3 A17.
+- BCxxx SQLSTATE allocations extended per Part 3 A18.
+
 ## Decision
 
 ### 1. Source-of-truth model (path B)

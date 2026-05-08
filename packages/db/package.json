@@ -15,7 +15,13 @@
     "clean": "rm -rf dist .turbo drizzle",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "smoke:rls": "bun scripts/smoke-rls.ts",
+    "smoke:partitioning": "bun scripts/smoke-partitioning.ts",
+    "smoke:functions": "bun scripts/smoke-functions.ts",
+    "smoke:bootstrap": "bun scripts/smoke-bootstrap.ts",
+    "smoke:reaper": "bun scripts/smoke-reaper.ts",
+    "inspect:rls": "bun scripts/inspect-rls.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

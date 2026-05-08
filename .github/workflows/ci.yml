@@ -33,3 +33,6 @@ jobs:
 
       - name: Cascade-10 — prepare:false in postgres-js client
         run: bun run check:prepare-false
+
+      - name: M1 bypass detection — no direct mutations on wallet-protected tables
+        run: bun run check:direct-mutation

@@ -9,6 +9,25 @@ provisional: false
 
 # Path-B paired-write enforcement: do production Postgres ledger systems use triggers, stored functions, or application-level discipline — and which mechanism is structurally available without inheriting the documented trigger anti-pattern?
 
+## Erratum 2026-05-04 — pgledger M2 attribution falsified by source-walk; F2 + F3 corrected
+
+Per `[[wallet-functions-research]]` (Q3 of the wallet gap-cluster /research queue, executed 2026-05-04). The original 2026-05-02 entry's S3 cite + F2 + F3 conclusions about pgledger were inferred from API shape and prior-research framing without source verification. A fresh source-walk of `pgr0ss/pgledger@b3143a3` (288-line `pgledger.sql` read linearly, plus AGENTS.md + 4 example SQL files, plus `grep -rni "security definer\|grant\|revoke\|create role\|create user"` across the repo) **falsifies** the SECURITY-DEFINER claim and the only-through-functions claim:
+
+- **S3 line 56 (verbatim falsification):** *"`pgledger_create_transfer()` and `pgledger_create_transfers()` functions. Account balance changes happen *only* through these functions; they are SECURITY DEFINER and enforce invariants internally before COMMITting."* — **wrong on both counts.** Pgledger functions carry no `SECURITY DEFINER` clause anywhere in `pgledger.sql`; they are SECURITY INVOKER (Postgres default). Pgledger ships zero `GRANT/REVOKE/CREATE ROLE/CREATE USER` statements. The `examples/lock-account.sql` example explicitly shows `UPDATE pgledger_accounts SET allow_negative_balance = 'false' WHERE id = ...` issued directly from the application — direct table mutation is part of the documented usage.
+- **F2 line 119 (corrected):** "M2 — Stored-procedure-only-interface ... Cited: pgledger (S3)." **Pgledger does NOT ship M2.** Pgledger ships M1 (app-library + ergonomic discipline) — the function is the *convenient* path, not the *only* path. The "stored-function-only-interface" framing in F2 is an aspirational synthesis, not pgledger's actual mechanism.
+- **F3 line 123 (corrected):** "pgledger's stored-function-only-interface is the strongest production cite for *structural* enforcement on Postgres." **Pgledger has no production cite for structural enforcement** — there is no privilege barrier in pgledger between the application and direct UPDATE. F3's claim is empty.
+
+**Cite chain after correction:** M2 (the privilege-barrier mechanism — SECURITY DEFINER functions + table-level REVOKE on app role + REVOKE/GRANT on functions) has **no surveyed production cite for ledger or wallet code**. The technique is canonical per Postgres 16 docs (`postgresql.org/docs/16/sql-createfunction.html` — observed 2026-05-04, full extraction in `[[wallet-functions-research]]` S2) but has not been published-validated for ledgers in any source surveyed during Q3 (pgledger source, Brandur, Square Books, Modern Treasury, PostgREST docs, multi-tenant SaaS guidance).
+
+**Production cite status after correction:**
+- **M1 (app-library + discipline)** — production-cited tier 1 across **three** independent ledger references: Brandur `rocket-rides-atomic` (Ruby), Square Books (engineering blog), pgledger (Postgres-native). Was previously cited at "M1 Brandur + Square Books only"; pgledger now joins M1's cite-cluster.
+- **M2 (SECURITY DEFINER + table-level REVOKE)** — docs-cited tier 2 (Postgres canonical pattern), no production cite for ledger code in surveyed sources.
+- **M3 (trigger)** — anti-pattern per GitGuardian removal post-mortem (S4) — unchanged; no surveyed production cite for paired-write enforcement.
+
+**Cascade impact on `[[wallet-mechanics]]`:** the original 2026-05-02 §2 commitment to M2 was load-bearing on the now-falsified pgledger cite. Per `[[wallet-mechanics]]` Amendment 2026-05-04 (A1), the §2 mechanism is downgraded from M2 to M1 — function bodies stay; SECURITY DEFINER is removed; role-based REVOKE is removed; CI lint per A1 mitigates the M1-class bypass failure mode. Per *Source quality ladder*, tier-1 production cite (M1 across three references) beats tier-2 docs-cited novel synthesis (M2 Postgres docs only).
+
+**Evidence-class lesson recorded:** S3's evaluation in the original 2026-05-02 entry leaned on the description-shape of pgledger (it's *function-based*, the README emphasizes the function set as the API) rather than on a function-by-function source read. The correct evaluation discipline is to walk the source and grep for the privilege primitives (`SECURITY DEFINER`, `GRANT`, `REVOKE`, `CREATE ROLE`) before attributing a privilege-barrier claim — *function-shaped API* is not the same as *function-only-mutation-path*. Future research entries citing pgledger or similar codebases should grep for these primitives in addition to reading the API surface.
+
 ## Question
 
 `[[wallet-source-of-truth-research]]` recommends path B (CRUD on `wallet.balance` with a same-txn `transactions` audit row) and proposes a Postgres trigger that aborts balance updates without a paired audit-row insert. **The trigger claim was made without a production cite.** This research closes that gap.

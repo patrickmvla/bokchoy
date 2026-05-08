@@ -57,3 +57,4 @@ drizzle/.snapshot.json
 
 # Pre-bocek design docs (vault is source of truth for decisions)
 docs/
+.claude/settings.local.json

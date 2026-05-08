@@ -12,7 +12,11 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo"
   },
-  "dependencies": {},
+  "dependencies": {
+    "better-auth": "catalog:",
+    "drizzle-orm": "catalog:",
+    "@bokchoy/db": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "catalog:",
     "@types/node": "catalog:"
