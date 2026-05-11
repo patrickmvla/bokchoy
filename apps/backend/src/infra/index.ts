@@ -4,3 +4,4 @@
 // audit-log helpers.
 
 export { client, db } from './db';
+export { errorMiddleware } from './error-middleware';

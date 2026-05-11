@@ -18,7 +18,11 @@
     "@opentelemetry/resources": "catalog:",
     "@opentelemetry/semantic-conventions": "catalog:",
     "@bokchoy/db": "workspace:*",
-    "drizzle-orm": "catalog:"
+    "@bokchoy/wallet": "workspace:*",
+    "drizzle-orm": "catalog:",
+    "@hono/standard-validator": "catalog:",
+    "@standard-schema/spec": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "typescript": "catalog:",

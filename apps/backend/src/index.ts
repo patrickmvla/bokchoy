@@ -16,11 +16,15 @@
 // [[idempotency-strategy]] D2-α; first non-test/non-script INSERT INTO
 // idempotency_keys reopens [[reaper-schedule-deferral]] trigger).
 //
-// EXPLICITLY OUT OF THIS SLICE (each lands when its consumer arrives):
+// Slice 8.1c — mounts wallet credit/debit handlers + Stripe-wrapped error
+// middleware (translates WalletError → {error:{code,message,...details}} per
+// [[wallet-http-contract]] G5 + BCxxx → HTTP map per [[wallet-mechanics]]
+// §SQLSTATE).
+//
+// EXPLICITLY OUT (each lands when its consumer arrives):
 //   • Better Auth wiring via @bokchoy/auth-config — no auth routes yet.
 //   • Outbox poller co-hosted loop per [[backend-service-shape]] §4 — no jobs
 //     to process; would be dead infrastructure today.
-//   • Wallet handlers + error middleware (slice 8.1c).
 //   • SIGTERM graceful-shutdown handler beyond OTel SDK shutdown (telemetry.ts).
 
 // Side-effect import: starts the OTel SDK before any other module loads. Must
@@ -35,8 +39,9 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
-import { db } from './infra';
+import { db, errorMiddleware } from './infra';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
+import { mountWalletRoutes } from './wallet';
 
 type AppContext = ApiKeyContext & IdempotencyContext;
 
@@ -99,6 +104,15 @@ app.post('/v1/health-authed', apiKeyMiddleware, idempotencyMiddleware, async (c)
 
   return c.json(result);
 });
+
+// Slice 8.1c — wallet credit/debit routes per [[wallet-http-contract]].
+mountWalletRoutes(app);
+
+// App-level error handler — translates WalletError → Stripe-wrapped JSON,
+// HTTPException 400 → VALIDATION_ERROR shape, anything else → 500. Must be
+// registered after route mounts (Hono onError applies app-wide regardless of
+// definition order, but kept after mounts for readability).
+app.onError(errorMiddleware);
 
 const port = Number(process.env.PORT) || 3000;
 

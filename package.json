@@ -24,7 +24,10 @@
     "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.217.0",
     "@opentelemetry/resources": "^2.7.1",
-    "@opentelemetry/semantic-conventions": "^1.40.0"
+    "@opentelemetry/semantic-conventions": "^1.40.0",
+    "@hono/standard-validator": "^0.2.2",
+    "@standard-schema/spec": "^1.1.0",
+    "zod": "^4.4.3"
   },
   "scripts": {
     "build": "turbo run build",
