@@ -3,5 +3,6 @@
 // per [[backend-stack]] F1 + [[multi-tenant-rls-research]], telemetry plumbing,
 // audit-log helpers.
 
+export { auth } from './auth';
 export { client, db } from './db';
 export { errorMiddleware } from './error-middleware';

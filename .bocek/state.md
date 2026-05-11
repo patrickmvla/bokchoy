@@ -1,5 +1,113 @@
 ## Current state
-- **Mode:** design → working tree commit-ready 2026-05-11 (both wire-shape decisions vaulted; ZERO code changes required; current code already matches both contracts)
+- **Mode:** implementation → slice 8.2.0 LANDED 2026-05-11 (`[[admin-auth-surface]]` primitive layer shipped; 5/6 cascade obligations satisfied; integration-tests obligation deferred to slice 8.2.1 first-consumer smoke per project convention; gap report at `.bocek/vault/architecture/gaps.md` flags two queued amendments + path cleanup)
+- **Slice 8.2.0 LANDED 2026-05-11 per `[[admin-auth-surface]]` contract.** Eight work units shipped:
+  - **`packages/auth-config/src/index.ts`** extended with `createAccessControl({ reasonCode: ['bootstrap'], player: ['deidentify'] } as const)` + `adminRole` granting both + `roles` export keyed by `'admin'`. Plugin wiring updated to `organization({ ac, roles })`. Per [[admin-auth-surface]] D3 + D5; `roles` export load-bearing for cascade obligation #3 (CI lint).
+  - **`apps/backend/src/infra/auth.ts`** (NEW) — Better Auth singleton via `createAuth({ db, baseURL, trustedOrigins })`. Closes `apps/backend/src/index.ts:25` "Better Auth wiring explicitly out" comment. `auth.api.getSession` / `auth.api.hasPermission` work without mounting Better Auth's HTTP routes (route-mount is cockpit-slice scope).
+  - **`apps/backend/src/infra/index.ts`** updated to re-export `auth`.
+  - **`apps/backend/src/admin/admin-gate.ts`** (NEW) — Hono middleware factory `adminGate({ resource, actions, projectIdParam? })`. Implements the 5-step contract verbatim: session → resolve org (body → query → session precedence) → optional project tenancy check → member lookup → hasPermission. Sets typed `c.var['admin.member']` + `c.var['admin.org']`. OTel span `admin.gate` with `auth.{resource,actions,has_project_scope,user_id,organization_id,role,outcome}` attributes covering pass + 5 named failure paths.
+  - **`apps/backend/src/admin/index.ts`** (NEW) — barrel re-export `adminGate`, `AdminContext`, `AdminGateOptions`.
+  - **`apps/backend/package.json`** — added `@bokchoy/auth-config: workspace:*` + `better-auth: catalog:` deps.
+  - **`scripts/check-auth-roles.ts`** (NEW) — post-migration CI lint. Queries `SELECT DISTINCT role FROM "member"`, asserts every value is in `Better Auth defaults ∪ Object.keys(roles)`. Per [[admin-auth-surface]] *Mitigations* primary failure mode.
+  - **`package.json`** — added `check:auth-roles` script wiring the new lint.
+- **Verification:**
+  - **`bun run typecheck`** (turbo: 6/6 packages green — both auth-config + backend cache-miss recompiled with new code).
+  - **`bun run lint:check`** exit 0 (2 pre-existing `packages/wallet/scripts/smoke-wrappers.ts` slice-7.7 warnings only; ZERO from slice 8.2.0 code after biome auto-fix import sort + manual `noConfusingVoidType` fix + `satisfies` + `Parameters` boundary cast replacing `as any`).
+  - Integration smoke deferred per Gap 1.
+- **Cascade obligations status:**
+  - **#1 Wire static AC + adminRole in packages/auth-config/src/index.ts** ✅ LANDED.
+  - **#2 Implement adminGate middleware at apps/backend/src/admin/admin-gate.ts** ✅ LANDED.
+  - **#3 CI lint scripts/check-auth-roles.ts** ✅ LANDED + wired via `bun run check:auth-roles`.
+  - **#4 Integration tests at apps/backend/src/admin/admin-gate.test.ts** ⏸ DEFERRED to slice 8.2.1 first-consumer smoke per Gap 1. Project convention is `/tmp/smoke-*.sh` shell scripts; vault entry's named path was a /design improvisation that didn't match project pattern.
+  - **#5 BC4xx error-code allocation amendment to [[wallet-mechanics]] A18** ⏸ DEFERRED per Gap 2 — mechanical, not blocking; queue for next /design or /refactoring.
+  - **#6 OTel span emission** ✅ LANDED inside adminGate.
+- **Self-attack pass:**
+  - **Boundary input** (malformed UUID): UUID_REGEX validates before DB query → 400 BC400, not 500. ✅
+  - **Error path** (DB down / Better Auth error): bubbles to existing errorMiddleware → 500. ✅
+  - **Cancellation**: span ends in finally; no resource leak. ✅
+  - **Observability gap**: 6 outcome values stamped on `admin.gate` span (pass + fail.401 + fail.400 + fail.403_cross_org + fail.403_not_member + fail.403_perm); alerting rule fires on outcome != 'pass' rate > 5% over 5min per project. ✅
+  - **Concurrency hazard**: middleware is per-request; Better Auth's in-memory `cacheAllRoles` is keyed by `organizationId`, safe across concurrent requests for the same org. ✅
+  - **Idempotency**: gate is read-only; retries re-run cleanly. ✅
+  - **Anti-default review**: senior reviewer would catch (a) `as HasPermInput` cast at one boundary — necessary because Better Auth's input is ZodIntersection; downstream typed cleanly; (b) 4 DB roundtrips per gated request (Better Auth session + optional project + member + org) — could collapse to JOIN at perf-pass; trade is simplicity wins at MVP, revisit if p95 > 100ms; (c) body precedence might silently override session activeOrg — vault entry documents body-wins-on-conflict as production-cited × 10, tenancy check is the actual security boundary.
+- **Gap reports** at `.bocek/vault/architecture/gaps.md`:
+  - **Gap 1**: integration-test path vs project convention (recommend (a) defer to 8.2.1 smoke; amend `[[admin-auth-surface]]` *Mitigations* row 4).
+  - **Gap 2**: BC4xx wire-code namespace not vaulted in `[[wallet-mechanics]]` A18 (mechanical amendment queued).
+  - **Gap 3**: `apps/auth-config/` path discrepancy in 3 vault entries (mechanical refactor queued).
+- **Open / known debt (carried, UNCHANGED by 8.2.0):**
+  - All slice-8.1-era debt items still open (deploy runbook for pg_cron, failed-run alerting, `extensions.grant_pg_cron_access` verify, `BOKCHOY_API_KEY_HMAC_SECRET` rotation runbook, cockpit-driven key creation, WWW-Authenticate response header on 401, sampler revisit at scale, OTel layers 2+3).
+  - `walletDeidentifyPlayer` HTTP handler — DSR flow, blocked on adminGate (now unblocked!) but also blocked on Q3 (DSR shape in ledger contexts) research from prior /design seat.
+  - `bootstrapProjectReasonCodes` HTTP handler — admin-only, now unblocked by adminGate.
+  - **`.env.example`** — owes `BOKCHOY_BASE_URL` + `BOKCHOY_TRUSTED_ORIGINS` additions (added in slice 8.2.0 code path but env-example update is queued; matches the slice-8.1a/b cleanup-pass pattern).
+- **Cascades active (NEW after 8.2.0):**
+  - **`adminGate` opens first-consumer slot** — slice 8.2.1 can pick either `bootstrapProjectReasonCodes` (no DSR research dependency) or `walletDeidentifyPlayer` (requires Q3 DSR research entry per prior /design seat's queued open thread).
+- **Cascades active (UNCHANGED):**
+  - `[[idempotency-strategy]]` §Concurrency Generalization note watch — second cross-cutting middleware writing to UNIQUE-constrained table triggers promotion to `[[upsert-race-loser-pattern]]` standalone entry.
+- **Next on resume — recommended sequence:**
+  1. **Slice 8.2.1** — pick first admin handler consumer. **`bootstrapProjectReasonCodes` is the lower-risk path** (no Q3 DSR research dependency; admin role grants `reasonCode:bootstrap` permission; data shape per `[[wallet-mechanics]]` Part 3 A15 `reason_codes` schema). `walletDeidentifyPlayer` requires Q3 DSR research first (carry-forward from prior /design seat's queued threads).
+  2. **`/tmp/smoke-8-2.0-admin-gate.sh` integration smoke** ships alongside slice 8.2.1 first consumer — closes Gap 1 by exercising the full 5-step gate end-to-end against real Better Auth sessions + member rows + project rows.
+  3. **Optional: `/design` mini-pass** to resolve Gap 1 + Gap 2 vault amendments (≤30min; both are mechanical). Cleaner long-term but not blocking 8.2.1.
+  4. Working tree as of this session = slice 8.1.x cluster (committed) + Q2 research entry + admin-auth-surface decision entry + slice 8.2.0 implementation (8 file changes) + gap-report entry — all ready for next commit.
+
+- **Mode (prior):** design → handoff to /implementation 2026-05-11 (admin auth surface RESOLVED + vaulted as `[[admin-auth-surface]]`; five sub-decisions D1-D5 grounded; six rejected alternatives named; three failure modes mitigated; ready for slice 8.2 admin handler implementation)
+- **/design pass 2026-05-11 LANDED.** One decision entry shipped covering D1-D5 from prior /research handoff. Position derivation per primitive's *Operating at your ceiling* protocol: enumerated alternatives per sub-decision, ranked by evidence quality, self-attacked picks, anti-default check applied.
+- **`[[admin-auth-surface]]`** — admin gate is a Hono middleware factory `adminGate({ resource, actions })` running the canonical 5-step gate (session → resolve org → BokChoy-side tenancy check → member lookup → `hasPermission`) per `[[better-auth-org-admin-research]]` F1. Sets typed `c.var['admin.member']` + `c.var['admin.org']` for downstream handlers; org resolved via `body ?? query ?? session.activeOrganizationId`. Static AC at MVP; statements + single `"admin"` role declared at `packages/auth-config/src/index.ts` startup.
+- **Picks summary (all grounded against the picks-table presented to user 2026-05-11):**
+  - **D1** = (α) body precedence + session fallback — production-cited × 10 Better Auth call sites at commit `e21d744`. Confidence: high.
+  - **D2** = (μ) Hono middleware factory — BokChoy internal precedent × 3 prior slices (api-key/idempotency/error-middleware) + Hono first-class composition primitive + `idioms/typescript.md` *Make impossible states unrepresentable*. Confidence: medium-high (gap-flagged: no public B2B SaaS Better-Auth+Hono+middleware-factory source-walked).
+  - **D3** = Static AC at MVP — `[[backend-stack]]` §7 commitment 2026-05-03 confirmed by code (no `organizationRole` table in `packages/db/src/schema/auth.ts`). Confidence: high.
+  - **D4** = Schema scope unchanged at MVP — direct corollary of D3 + `[[backend-stack]]` §7 customer-team-member deferral. Confidence: high.
+  - **D5** = Two statements + one `"admin"` role — `{ reasonCode: ['bootstrap'], player: ['deidentify'] }` + adminRole granting both. Smallest set mapping both named consumers (`[[wallet-http-contract]]:24,207`); 2-line-edit extension shape. Confidence: high.
+- **User defense ratified:** *"single role at MVP still holds, vault it"* — defended via `[[backend-stack]]` §7 commitment standing unchanged after two weeks; no surfaced constraint to flip. Per *Response calibration* (sound reasoning with evidence → accept, record, move on).
+- **Codebase reading was load-bearing this pass.** Verified `packages/auth-config/src/index.ts` already exists with `createAuth()` factory + `betterAuth({ plugins: [anonymous(), organization()], advanced.database.generateId: 'uuid' })`. Verified `packages/db/src/schema/auth.ts` already has the 7-table baseline (user/session/account/verification/organization/member/invitation) with `session.activeOrganizationId: uuid` + `member.role: text NOT NULL DEFAULT 'member'`. Pre-existing wiring matches research findings exactly — `member.role` schema verbatim with Better Auth source-walk per `[[better-auth-org-admin-research]]` F1. **Three vault entries reference stale `apps/auth-config/` path**; cleanup cascade owed.
+- **Cascade obligations queued for /implementation phase:**
+  1. **Wire static AC + adminRole in `packages/auth-config/src/index.ts`** — extend existing `createAuth()` factory: `import { createAccessControl } from 'better-auth/plugins/access'` + define statements + define adminRole + pass `{ ac, roles: { admin: adminRole } }` to `organization()`.
+  2. **Implement `adminGate({ resource, actions })` Hono middleware factory** at `apps/backend/src/admin/admin-gate.ts` (new dir + file). Hono `Variables` generic: `{ 'admin.member': Member; 'admin.org': Organization }`. 5-step gate per the contract.
+  3. **CI lint `scripts/check-auth-roles.ts`** — post-migration smoke querying `SELECT DISTINCT role FROM member`, asserts every value is a key in the exported `roles` config. Deploy-pipeline gate; failure = abort.
+  4. **`adminGate` integration tests** at `apps/backend/src/admin/admin-gate.test.ts` — 3 positive (admin/owner/custom-with-permissions) + 4 negative (no-session-401, missing-org-400, cross-org-project-403, member-without-permission-403). Reuses slice 8.1c smoke pattern.
+  5. **BC400/BC401/BC403 error-code allocation** — extend `[[wallet-mechanics]]` Part 3 A18 BCxxx namespace via mechanical amendment when first admin handler ships in slice 8.2.
+  6. **OTel span emission from `adminGate`** with `auth.{organizationId,userId,role,resource,actions,outcome}` attributes. Page-rule on `outcome != 'pass'` > 5% over 5min per project.
+- **Cascade obligations queued for next /design or /refactoring pass (NOT blocking implementation):**
+  1. **Path-discrepancy cleanup** — `apps/auth-config/` → `packages/auth-config/` in three vault entries: `[[tenancy-ids-research]]:256`, `[[wallet-mechanics]]` A12 cascade obligations, prior state.md entries. One-pass amendment.
+- **Open threads (carried, NOT blocking implementation):**
+  - **D2-(μ) production-cite gap** — no public B2B SaaS Better-Auth+Hono+middleware-factory source-walked. Confidence medium-high vs high; not blocking, but if a future constraint forces D2 revisit, run focused /research pass on Cal.com / Deel.com / MeetingBaas admin handler shape.
+  - **Org plugin rewrite stabilization** — Better Auth PRs `#7251` + 5 follow-ups in flight through 2026-Q1/Q2; pin Better Auth version in `packages/auth-config/package.json`; re-survey on bump.
+  - **Q1 (sequencing) from prior /design seat collapsed** — Q2 finding made admin-auth-surface decision tractable enough to vault directly; sequencing question becomes "ship admin-auth-surface in slice 8.2, then `bootstrapProjectReasonCodes` and `walletDeidentifyPlayer` as parallel-or-sequential implementation work." No sequencing research owed.
+  - **Q3 (DSR shape in ledger contexts) still owed** when /design picks `walletDeidentifyPlayer` as a slice. Out of scope this pass; admin-auth-surface entry doesn't preclude any DSR shape.
+- **Next on resume — recommended sequence:**
+  1. **Switch to `/implementation`** with `[[admin-auth-surface]]` as the contract. Six cascade obligations enumerated above; pick first consumer (`bootstrapProjectReasonCodes` vs `walletDeidentifyPlayer`) as the parallel slice-8.2 work.
+  2. /implementation flags any gap in the contract back to /design (BC4xx allocation cleanup is the most likely gap-flag — mechanical, not architectural).
+  3. Working tree as of this session = slice 8.1.x cluster (committed) + Q2 research entry + admin-auth-surface decision entry (both vaulted, both ready for next commit).
+
+- **Mode (prior):** research → handoff to /design 2026-05-11 (Q2 vaulted: `[[better-auth-org-admin-research]]` — admin-gate canonical pattern + (P1) ratified + custom-statements obligation surfaced + two design follow-ups owed)
+- **/research pass 2026-05-11 LANDED.** One entry shipped, triangulated per *Triangulation* gate (1 production cite + 1 docs cite + 1 contradiction probe):
+  - **`[[better-auth-org-admin-research]]`** — closes /design Q2 (Better Auth org plugin admin-gate shape for slice 8.2). Production-cited via source-walk of `better-auth/better-auth` org plugin at commit `e21d744` (HEAD 2026-05-11); docs-cited via better-auth.com/docs/plugins/organization v1.6; contradiction probe across GitHub issues + demo-app source.
+- **F1 (LOAD-BEARING):** canonical admin gate = `hasPermission()` called manually at handler top. Every protected route in Better Auth's own org plugin code (crud-org / crud-team / crud-members / crud-invites / crud-access-control) follows `findMemberByOrgId` → `hasPermission({ permissions, role: member.role, options, organizationId }, ctx)` → throw FORBIDDEN. **No middleware decorator exists**; docs confirm; manual call is the intended pattern.
+- **F2:** Session carries `activeOrganizationId` ONLY; role lookup is a separate `findMemberByOrgId` adapter call. In-memory `cacheAllRoles` exists for repeated checks within same request.
+- **F3:** Default statements (`organization` / `member` / `invitation` / `team` / `ac`) don't include BokChoy resources. **BokChoy MUST extend** via `createAccessControl({ reasonCode: ["bootstrap"], player: ["deidentify"], project: ["read", "update"] })` + custom roles in `apps/auth-config/src/index.ts`.
+- **F4:** Multi-role via comma-separated `member.role` string; OR-of-roles semantics built-in. Free headroom, not required at MVP.
+- **(P1 vs P2) settled:** (P1) is production-cited. `member.role === "member"` (default) has ZERO permissions per `access/statement.ts:29-35`; only `"admin"` / `"owner"` (or extended role) passes. (P2) is regression vs defaults, undefended.
+- **C1 contradiction (stability signal):** org plugin mid-rewrite across 6 in-flight PRs (#7251, #7544, #7591, #7601, #7628, #7886) through 2026-Q1/Q2. v1.6 stable; pin Better Auth version; expect minor-version migration work on next bump.
+- **C2 contradiction (resolved):** demo app's `/admin` route uses `session.user.role !== "admin"` — that's the SEPARATE `admin` plugin (instance-admin), not org plugin. BokChoy customer-developer-admin = org plugin's `member.role`. If BokChoy ever ships BokChoy-staff cross-org admin, that's `admin` plugin's `user.role` — separate decision.
+- **F5 risk cleared:** `[[backend-stack]]` F5 (custom-field UI breakage) is bundled-UI-only; server-side `hasPermission()` flow unaffected. Confirmed in source-walk.
+- **Operational implications:** both `bootstrapProjectReasonCodes` and `walletDeidentifyPlayer` share a 5-step admin gate (Better Auth session → resolve org → BokChoy-side `project.organization_id === activeOrgId` check → `findMemberByOrgId` → `hasPermission`). Hono middleware factory `adminGate({ resource, actions })` defensible for ≥3 admin handlers.
+- **Anti-default applied:** explicitly searched for non-`hasPermission` admin-gate patterns. Found demo-app `user.role` compare → resolved as `admin` plugin (different surface). Found rewrite-in-progress → flagged as version-pin obligation, not contradiction.
+- **Q2 sub-question outcomes:**
+  - (a) "How is single role at MVP implemented?" → `member.role` is a `string NOT NULL DEFAULT 'member'` column; `"admin"` / `"owner"` are statement-derived defaults; comma-separated for multi-role.
+  - (b) "Where does the gate land?" → manual call at handler top; no middleware decorator in Better Auth surface.
+  - (c) "What does session carry?" → `activeOrganizationId` only; role lookup separate.
+- **Q2 collapse on prior Q2-scope:** prior /design seat asked "is the choice vaulted" — verified YES at `[[backend-stack]]` §7 line 91 + nested-org rejected alternative line 268. /research correctly walked back skepticism inline before scoping Q2.
+- **Open threads (carried forward):**
+  - **(Design follow-up, NOT research) D1:** session-context posture pick — require `organizationId` explicit in body/query, or require `activeOrganizationId` set on session. Both production-cited; choice downstream of cockpit UX vs SDK-script-admin expectations.
+  - **(Design follow-up, NOT research) D2:** admin-gate shape pick — Hono middleware factory `adminGate({ resource, actions })` vs inline per handler. Better Auth's own code inlines; BokChoy may DRY across ≥3 handlers.
+  - **(Cross-cutting, future)** Org plugin rewrite (PRs #7251 + 5 follow-ups) signals API shift in next minor/major. Pin Better Auth version in `package.json`; queue re-survey when rewrite merges to main.
+  - **(Optional triangulation extension)** Production survey of B2B SaaS shipping Better Auth org plugin without RBAC plugin — Cal.com, Deel.com cited as production users in `[[backend-stack-research]]` Sources 8-9; their public source/docs may corroborate F1 with tier-1 cite. Not blocking; current triangulation already meets the gate.
+  - **(Q1 may now collapse)** Sequencing question (Q1 from prior /design seat) was downstream of Q2 complexity. Q2 finding: admin-auth-surface is medium-complexity (custom statements + extended roles + 5-step middleware) — strict (a) Better-Auth-org-plugin-first sequencing is now defensible, NOT trivially-decidable as initially hoped. Q1 still owed if /design wants production-cited sequencing survey; defer until ready to ship a second consumer.
+  - **(Q3 still owed)** DSR shape in ledger contexts — only matters when /design picks `walletDeidentifyPlayer` as next slice 8.2 consumer.
+- **Next on resume — recommended sequence:**
+  1. **Switch to `/design`** with `[[better-auth-org-admin-research]]` in hand. /design weighs D1 (session-context posture) + D2 (middleware-factory vs inline) and vaults the admin-auth-surface decision entry. With (P1) ratified, the slice 8.2 scope becomes: extend statements + extend roles + ship `adminGate` (or inline pattern) + wire `bootstrapProjectReasonCodes` + wire `walletDeidentifyPlayer`. Three sub-decisions per the design primitive.
+  2. After D1/D2 resolved → /implementation can quote contracts and ship.
+  3. Working tree as of this session = slice 8.1.x cluster (committed) + this Q2 research entry (vaultable next commit).
+
+- **Mode (prior):** design → working tree commit-ready 2026-05-11 (both wire-shape decisions vaulted; ZERO code changes required; current code already matches both contracts)
 - **/design pass 2026-05-11 LANDED — both decisions vaulted with research-cited evidence + customer-profile-axis reframe.** Three vault amendments shipped:
   - **(1) `[[wallet-http-contract]]` G4 in-place amendment — c1 RESOLVED: pin JSON-by-construction.** Production-cited × 3 (Brandur + Stripe + Shopify per `[[replay-non-json-body-research]]` F1). Handlers behind `idempotencyMiddleware` MUST emit JSON; non-JSON is undefined behavior. Current code at `apps/backend/src/idempotency/middleware.ts:266-273` falls back to `null` body on JSON-parse failure as defense-in-depth, NOT as contract guarantee. Revisit-when: any new handler emits non-JSON Content-Type behind idempotency middleware → reopen with named consumer.
   - **(2) `[[wallet-http-contract]]` G5 in-place amendment — c2 partial: defend bespoke-vs-payment-API divergence.** Documents that BokChoy ships per-error-code structured detail fields (BC010 `walletId/requested/available`, BC022 `walletCurrency/requested`, BC050 `constraintName`) and that this DIVERGES from production payment-API convention (Stripe + Square + PayPal × 3 ship ZERO structured numerics in error envelopes). Divergence justified on customer-profile axis: BokChoy = developer-facing SDK during dev (snapshot-at-error matters for debug); payment APIs = end-user-facing error UX (refetch-for-current-state matters more). Cross-refs Fork 2 amendment for typing defense.
