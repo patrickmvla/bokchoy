@@ -29,6 +29,12 @@ import { defaultStatements as bauthStatements } from 'better-auth/plugins/organi
 // / member / invitation / team / ac) MERGED with BokChoy custom resources:
 //   - reasonCode:bootstrap → bootstrapProjectReasonCodes (slice 8.2.1)
 //   - player:deidentify    → walletDeidentifyPlayer (slice 8.2 / DSR flow)
+//   - project:create+read  → POST /v1/projects + GET /v1/projects per
+//                            [[admin-list-endpoints-contract]] slice 8.3+8.4
+//   - apiKey:create+revoke → POST /v1/projects/{id}/api-keys + DELETE same
+//                            per [[admin-list-endpoints-contract]] slice 8.4
+//   - org:read             → GET /v1/orgs/me per [[admin-list-endpoints-contract]]
+//                            slice 8.3
 //
 // Hand-roll all three roles (admin / owner / member) ground-up rather than
 // spreading Better Auth's defaultRoles + overriding admin/owner — the default
@@ -44,6 +50,9 @@ export const statements = {
   ...bauthStatements,
   reasonCode: ['bootstrap'],
   player: ['deidentify'],
+  project: ['create', 'read'],
+  apiKey: ['create', 'revoke'],
+  org: ['read'],
 } as const;
 
 export const ac = createAccessControl(statements);
@@ -59,6 +68,9 @@ const adminRole = ac.newRole({
   ac: ['create', 'read', 'update', 'delete'],
   reasonCode: ['bootstrap'],
   player: ['deidentify'],
+  project: ['create', 'read'],
+  apiKey: ['create', 'revoke'],
+  org: ['read'],
 });
 
 // owner = admin permissions + organization delete. Per Better Auth
@@ -72,6 +84,9 @@ const ownerRole = ac.newRole({
   ac: ['create', 'read', 'update', 'delete'],
   reasonCode: ['bootstrap'],
   player: ['deidentify'],
+  project: ['create', 'read'],
+  apiKey: ['create', 'revoke'],
+  org: ['read'],
 });
 
 // member = Better Auth member default. Read-only on AC config (so members can
@@ -94,6 +109,26 @@ export const roles = {
 
 export type RoleName = keyof typeof roles;
 
+// ---- Trusted origins per [[auth-surface-mount]] (T-multi) ----
+//
+// Hardcoded module-level constant per inline /design decision 2026-05-11 —
+// matches the D3 static-AC pattern (statements + roles + trustedOrigins all
+// declared at module load; immutable per deploy). createAuth() callers may
+// still pass `opts.trustedOrigins` to override for tests / preview-deploy
+// scenarios; default is this list.
+//
+// Wildcard subdomain support per Better Auth Source 4 demo
+// (`https://*.better-auth.com`). Vercel preview deploys follow
+// `{project}-git-{branch}-{team}.vercel.app` naming → `*-bokchoy.vercel.app`
+// covers them. Local dev includes the default Next.js port.
+
+export const trustedOrigins = [
+  'https://bokchoy.com',
+  'https://www.bokchoy.com',
+  'http://localhost:3000',
+  'https://*-bokchoy.vercel.app',
+] as const;
+
 // ---- Auth instance factory ----
 
 export interface CreateAuthOptions {
@@ -112,7 +147,7 @@ export function createAuth(opts: CreateAuthOptions) {
       // Drizzle adapter autodiscovers tables from the Db typeparam.
     }),
     baseURL: opts.baseURL,
-    trustedOrigins: opts.trustedOrigins,
+    trustedOrigins: opts.trustedOrigins ?? [...trustedOrigins],
     advanced: {
       database: {
         // Load-bearing per [[tenancy-ids-research]] F1.

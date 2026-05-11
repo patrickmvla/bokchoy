@@ -40,7 +40,7 @@ import { Hono } from 'hono';
 import type { AdminContext } from './admin';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
-import { db, errorMiddleware } from './infra';
+import { auth, db, errorMiddleware } from './infra';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
 import { mountWalletRoutes } from './wallet';
 
@@ -109,6 +109,15 @@ app.post('/v1/health-authed', apiKeyMiddleware, idempotencyMiddleware, async (c)
 
   return c.json(result);
 });
+
+// Slice 8.3.0 — Better Auth handler mount per [[auth-surface-mount]] (H).
+// Canonical 3-LOC pattern from `[[cockpit-stack-integration-research]]` Source 1
+// (Better Auth Hono integration docs). Mounted AFTER httpInstrumentationMiddleware
+// (so OTel captures /api/auth/* spans) and BEFORE wallet route mounts. NO
+// cors() middleware under (P1) reverse-proxy: Vercel rewrites in cockpit's
+// next.config.ts preserve same-origin perception to the browser per
+// [[cockpit-stack-integration-research]] F1.
+app.on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw));
 
 // Slice 8.1c — wallet credit/debit routes per [[wallet-http-contract]].
 mountWalletRoutes(app);
