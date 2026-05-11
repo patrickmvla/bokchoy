@@ -113,7 +113,7 @@ BokChoy MVP backend stack:
 
 ### 7. Cockpit + admin auth (audiences a + b from session staging)
 
-- Cockpit web login = Better Auth email/password + magic-link (or OAuth via Google/GitHub plugin if customer demand surfaces)
+- Cockpit web login = Better Auth OAuth Google/GitHub primary + email/password fallback. Magic-link DEFERRED post-MVP (revisit if customer signal arrives). **Amended 2026-05-11** per design pick (iii) — OAuth-primary chosen for 2-person-team integrator audience per `[[cockpit-shape]]` + `[[cockpit-stack-integration-research]]` F7. Previous version: "email/password + magic-link (or OAuth via Google/GitHub plugin if customer demand surfaces)" — OAuth demand surfaced via cockpit /design pass; magic-link absent from MVP scope.
 - Admin SSO = Better Auth's OAuth providers (Google or GitHub) with explicit role-based access (single role at MVP; RBAC plugin post-MVP)
 - SDK API key = BokChoy-issued per project, signed HMAC pattern analogous to Stripe API key. Validated server-side against project's `api_keys` table. Independent of Better Auth (Better Auth handles human-developer auth; SDK key handles machine-to-machine)
 
