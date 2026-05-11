@@ -21,7 +21,8 @@
     "smoke:functions": "bun scripts/smoke-functions.ts",
     "smoke:bootstrap": "bun scripts/smoke-bootstrap.ts",
     "smoke:reaper": "bun scripts/smoke-reaper.ts",
-    "inspect:rls": "bun scripts/inspect-rls.ts"
+    "inspect:rls": "bun scripts/inspect-rls.ts",
+    "create:api-key": "bun scripts/create-api-key.ts"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

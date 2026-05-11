@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "hono": "catalog:",
-    "@hono/node-server": "catalog:"
+    "@hono/node-server": "catalog:",
+    "@bokchoy/db": "workspace:*",
+    "drizzle-orm": "catalog:"
   },
   "devDependencies": {
     "typescript": "catalog:",

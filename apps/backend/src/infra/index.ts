@@ -3,4 +3,4 @@
 // per [[backend-stack]] F1 + [[multi-tenant-rls-research]], telemetry plumbing,
 // audit-log helpers.
 
-export {};
+export { client, db } from './db';

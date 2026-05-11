@@ -4,4 +4,4 @@
 //
 // Consumes @bokchoy/auth-config for the Better Auth factory.
 
-export {};
+export { type ApiKeyContext, apiKeyMiddleware } from './api-key-middleware';
