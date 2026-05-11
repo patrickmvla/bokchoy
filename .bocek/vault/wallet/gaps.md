@@ -291,4 +291,179 @@ Both are load-bearing for idempotency correctness — they prevent double-fulfil
 
 ---
 
-## Summary (updated 2026-05-08 — 8 gaps total, gaps 1–7 resolved by 2026-05-04 design+research passes; gap 8 surfaced during Slice 3 implementation)
+## GAP 9 (surfaced 2026-05-09, slice 8.1 — first wallet HTTP handler): wallet HTTP contract + cross-cutting middleware shape undefined
+
+**Blocked step:** `apps/backend/src/wallet/index.ts` — the placeholder is `export {};` and the user picked "first wallet HTTP handler" as the next slice. The wrapper layer (`@bokchoy/wallet`) is fully landed (slice 7.7) and quotes its own contract verbatim from `[[wrapper-shape]]`. The HTTP-layer contract that consumes those wrappers is **not** in the vault.
+
+**What's missing:** a coherent design pass for the wallet HTTP surface + the cross-cutting middleware it activates. Eight subdecisions cluster, none individually large, but each shapes the public API or the middleware stack downstream features inherit.
+
+### G1. HTTP route shape
+
+- Path scheme: `/v1/wallets/{walletId}/credit` vs `/v1/projects/{projectId}/wallets/{walletId}/credit` vs `/v1/games/{gameId}/wallets/credit` vs RPC-style `/v1/wallet.credit`.
+- Method: POST conventional but unpinned for credit/debit specifically.
+- Body field casing: wrapper takes camelCase (`walletId`, `currencyId`); HTTP body convention undecided. Stripe uses snake_case at the wire boundary.
+- Response envelope: bare `{ transaction_id }` vs Stripe-style `{ id, object: 'transaction', ... }` vs `{ data: {...} }` vs RFC 8288-shaped.
+- Version prefix: `[[wallet-mechanics]]` line 439 mentions `POST /v1/webhooks/...` once; no formal commitment to `/v1` for wallet.
+
+### G2. Validation library at the HTTP boundary
+
+`idioms/typescript.md` line 75 (*"For libraries … accept `StandardSchemaV1<unknown, T>`"*) governs library code, not app code. Hono pairs naturally with `@hono/zod-validator`, `@hono/valibot-validator`, or `@hono/standard-validator`. No vault pick.
+
+### G3. Authentication for THE first wallet handler
+
+Three documented surfaces in `[[backend-stack]]` §7 + `[[player-auth]]`, three different middleware stacks, none pinned:
+
+- **SDK API key** (`Authorization: Bearer <key>`, validated server-side against `api_keys` table — table doesn't exist yet; `[[backend-stack]]` cascade obligation #4).
+- **Better Auth player session** (cookie or token via the `anonymous` plugin per `[[player-auth]]`).
+- **Cockpit admin session** (Better Auth org-member, for designer-initiated grants).
+
+Wallet credit's *production* caller is most likely a game server (SDK API key path), but compensation grants from the cockpit are also a valid first-handler target. The `api_keys` infra is its own slice.
+
+### G4. Idempotency middleware co-shipping vs stubbing
+
+The wrapper accepts `idempotencyKeyId?: number` (HTTP middleware path, slice 4.6) and `sourceEventId?: string` (server-derived natural-key path, `[[idempotency-strategy]]` default). Three positions:
+
+- **Co-ship slice 4.6** — full Idempotency-Key middleware lands with this slice. First `INSERT INTO idempotency_keys` reopens `[[reaper-schedule-deferral]]` per the trigger watchpoint in state.md.
+- **Skip 4.6** — require `sourceEventId` in body, server-derived natural key only. No `idempotency_keys` write; trigger doesn't fire.
+- **Stub 4.6** — accept the header, ignore it (or log), keep middleware shape forward-compatible.
+
+### G5. Error middleware response-body shape
+
+Hono `app.onError` translates `WalletError` → HTTP response. BCxxx → status code is pinned in `[[wallet-mechanics]]`; the **body shape** isn't:
+
+- Stripe-style `{ error: { type, code, message, ... } }` — production-cited at framework-defining level.
+- RFC 7807 `{ type, title, status, detail, instance }` — IETF standard for problem+json.
+- BokChoy-custom `{ error_code, error_details }` — owns the namespace; `[[idempotency-strategy]]` already uses `bokchoy_idempotency_key_*` codes which suggests namespace-owned.
+
+Affects every error-emitting endpoint downstream. Sets the SDK error-parsing surface.
+
+### G6. F1 `TenantTx` branded type — open thread, trigger fires here
+
+Per `[[backend-stack]]` F1 mitigation #2: type-level mirror of RLS via branded `Tx`. State.md's open-thread carry-forward names this as parked *"until first RLS-protected feature schema landed"*. That landing is now. Without it, `withTenant(...)` returns raw `Tx`; with it, RLS-protected accessors require a `TenantTx` brand obtainable only inside `withTenant`'s callback. Type-level discipline vs current runtime-only discipline.
+
+### G7. OTel SDK + exporter wiring
+
+Each wrapper has a `// TODO(otel): wrap with span per [[wallet-mechanics]] Amendment Part 1 A3 layer 1` marker. `[[backend-stack]]` defers SDK pick *"to first consumer"* — that's now. Sub-decisions: Node SDK vs OTel auto-instrumentation, exporter target (OTLP/HTTP to which collector), span attribute conventions (`bokchoy.project_id`, `bokchoy.wallet_id` per `[[wrapper-shape]]` Engineering substance).
+
+### G8. `project_id` + `walletId` data sources in the request
+
+Wrapper takes `projectId` (must match GUC) and `walletId`. HTTP layer must source both:
+
+- `projectId`: from authenticated API-key lookup? from request header `BokChoy-Project-Id` per `[[idempotency-strategy]]` Engineering substance? from path segment? — depends on G3 auth pick.
+- `walletId`: path segment vs body field — depends on G1 path shape.
+- `playerId`: not directly required by `walletCredit` (the wallet row already binds player+currency), but compensation/admin paths may want it for audit; `wallet_deidentify_player` *does* take it.
+
+### What's already pinned (the floor /design starts from)
+
+- Wrapper signatures + error class — `[[wrapper-shape]]` (slice 7.7 verbatim).
+- BCxxx → HTTP status — `[[wallet-mechanics]]` §SQLSTATE: BC001→409, BC002/010/021/022/050/060→422, BC020/040→500.
+- Idempotency-Key header semantics — `[[idempotency-strategy]]`: 255 chars, `bokchoy_idempotency_key_*` codes, 422 mismatch / 409 in-flight, hybrid server-derived OR client header.
+- `withTenant(db, projectId, fn)` is the RLS discipline; `@bokchoy/db` exports it (slice 6.5).
+- Auth-surface inventory — `[[backend-stack]]` §7 (SDK API key + Better Auth player session + Better Auth org session); cascade obligation #4 names `api_keys` table.
+- Hono framework + `@hono/node-server` adapter — slice 8.0 already wired.
+- Cross-runtime imports rule — `[[backend-stack]]` Amendment line 27.
+
+### Engineering substance at stake
+
+- **API contract permanence:** G1 + G2 + G5 set the public HTTP surface. Catalog, loot, IAP, cockpit, sdk all inherit the conventions. Picking from training-data default at slice 1 freezes BokChoy into "what was loudest at training time" — exactly the failure mode `/design` exists to prevent.
+- **Failure semantics:** G4's three branches give different observable behavior on retry storms. G5's body shape is what every customer SDK parses.
+- **Security:** G3 + G8 set the trust boundary. RLS GUC is downstream of whichever middleware sets it. Incorrect tenant-scope inheritance is the failure mode RLS exists to defend against.
+- **Concurrency:** G6 is type-level discipline that prevents runtime bypass. Trigger fires now; deferring leaves a known typed-hole through every RLS handler that follows.
+- **Observability:** G7's OTel pick is what every span attribute and exporter target depends on. Cascades to the cockpit's audit surface.
+
+### Unvetted options (clearly NOT recommendations)
+
+For G1 path shape:
+
+1. **Stripe-style flat resource path:** `/v1/wallet/credit` (POST), body carries `wallet_id` + everything. Stripe ships `/v1/charges`, `/v1/refunds` — flat resource verbs. (Production-cited × 1: Stripe.)
+2. **REST nested:** `/v1/wallets/{walletId}/credits` (POST). RESTful per RFC 7231 nounification. Common in Rails-shape APIs. (Common pattern; no specific cite.)
+3. **RPC-style:** `/v1/wallet.credit` (POST), Google API guide-style. Wins when operations don't map cleanly to nouns. (Production-cited: Google Cloud APIs.)
+4. **gRPC-Gateway / tRPC over HTTP:** path is generated; no manual route declaration. Mismatched with Hono's manual-route shape. (Production-cited: tRPC.)
+
+For G2 validator:
+
+1. **Zod via `@hono/zod-validator`:** dominant TS validator 2025-2026; production-cited at framework-defining level; ecosystem maturity. (Production-cited × many.)
+2. **Valibot via `@hono/valibot-validator`:** smaller bundle than Zod; modular; growing adoption. (Production-cited × few.)
+3. **Standard Schema spec via `@hono/standard-validator`:** library-author neutrality; accepts any Standard Schema. Works for app code too. (Spec-cited per `idioms/typescript.md`.)
+
+For G3 auth-surface for first handler:
+
+1. **SDK API key (Bearer):** ships `api_keys` table + HMAC validation middleware + `Authorization: Bearer` parsing. Most-likely production caller (game server). Largest scope.
+2. **Better Auth player session:** wires Better Auth, ships player auth flows. Even larger scope (anonymous plugin, argon2, organization plugin per `[[backend-stack]]`).
+3. **Cockpit admin session:** smallest scope (Better Auth org member only); but compensation/admin grants are a niche first-handler target.
+4. **Stub / no auth:** dev-only `X-Project-Id` header, validated as UUID, no signature. Useful for smoke-testing the wrapper integration; obvious removal blocker before production.
+
+For G5 error body shape:
+
+1. **Stripe shape `{ error: { type, code, message, param?, ... } }`:** production-cited at framework-defining level; SDK-friendly. (Production-cited × Stripe.)
+2. **RFC 7807 `{ type, title, status, detail, instance }`:** IETF standard problem+json. Production-cited via Spring-Boot's defaults, growing in TS ecosystem. (Spec-cited × IETF.)
+3. **BokChoy-custom `{ error_code, error_details: ErrorDetails }`:** owns the namespace; aligns with `[[wrapper-shape]]`'s `WalletError.code/details` discriminated union — the wrapper layer's structured error already maps cleanly to this shape. (No production cite; internal coherence with wrapper layer.)
+
+### To resolve
+
+`/design` recommended. The cluster shapes the public API surface + cross-cutting middleware for every HTTP-emitting feature that comes after wallet (catalog, loot, IAP, cockpit, sdk). Picking the wallet credit endpoint shape *first* and reverse-engineering everything else is the wrong direction — these decisions belong upstream of the first endpoint.
+
+Likely vault output: a new entry `[[wallet-http-contract]]` (or broader `[[backend-http-contract]]` if the conventions span features) covering G1/G2/G5; small amendments to `[[backend-stack]]` for G3 auth-surface ordering + G7 OTel pick; small amendment to `[[idempotency-strategy]]` if G4 lands middleware now; an open thread closure for G6 F1 `TenantTx`. Gaps 1-7 took one /design pass each in 2026-05-04; this cluster looks similar in shape.
+
+`/implementation` resumes once the entry lands — the first wallet HTTP handler is then a quote-and-execute slice with no remaining gaps.
+
+---
+
+## GAP 9 RESOLVED 2026-05-09 — `[[wallet-http-contract]]` LANDED
+
+All 8 sub-decisions resolved across three research entries (`[[http-contract-research]]`, `[[otel-stack-research]]`, `[[url-pattern-research]]`) + one /design pass producing `[[wallet-http-contract]]`. Slice 8.1 splits into 8.1a (auth + RLS type) + 8.1b (telemetry + idempotency middleware) + 8.1c (wallet handler). G1 URL pattern resolves to `POST /v1/wallets/{walletId}/credit` (slash-suffix-verb, production-cited × 2 via Stripe + GitHub). G2 validator: `@hono/standard-validator` + Zod 4.x. G3 auth: SDK API key (Bearer) co-shipped in 8.1a. G4 idempotency middleware co-shipped in 8.1b. G5 error body: Stripe-wrapped `{error:{code,message,...}}`. G6 `TenantTx` brand co-shipped in 8.1a. G7 OTel co-shipped in 8.1b (Honeycomb endpoint, manual instrumentation, no auto-instrumentations-node). G8 data sources resolve via G3.
+
+**RFC cite correction (2026-05-09):** GAP 9 G5 originally referenced "RFC 7807" — that spec is **superseded by RFC 9457 (July 2023, Standards Track, obsoletes 7807)** per `[[http-contract-research]]` Source 11. The /design pick (X) Stripe-wrapped doesn't depend on either RFC; the cite correction is bookkeeping. RFC 9457 was rejected as Alternative (Z) — spec-cited only, no major TS-native production adopter surfaced in the contradiction probe.
+
+**/design correction (2026-05-09):** GAP 9 G1 unvetted option (a) flat-action `POST /v1/wallet/credit` was based on a misread of Stripe's pattern. `[[url-pattern-research]]` source-walked stripe-node and confirmed Stripe ships `POST /v1/charges/{id}/capture` slash-suffix-verb on resource id, NOT flat. Pattern (d) `POST /v1/wallets/{walletId}/credit` is the production-cited answer.
+
+---
+
+## GAP 10 (surfaced 2026-05-10, slice 8.1b — idempotency middleware): `// allow-direct-mutation` opt-out semantics don't fit multi-line tagged-template SQL
+
+**Blocked step:** static check `bun run check:direct-mutation` fails with 3 hits at `apps/backend/src/idempotency/middleware.ts:139,175,230` — the three legitimate M1-trigger writes per `[[wallet-http-contract]]` G4 + `[[idempotency-strategy]]` D2-α. Slice 8.1b can't pass CI until the opt-out can be expressed.
+
+**What's missing:** A vaulted decision on how `// allow-direct-mutation:` opt-out is expressed when the protected-table mutation lives inside a multi-line `sql\`...\`` tagged template (Drizzle idiom).
+
+The current lint contract (slice 7 — `scripts/check-direct-wallet-mutation.ts:107-109`) requires the opt-out comment on the **same line** as the SQL keyword. The script's documented example (line 37 of the script) shows single-line tagged templates: `await tx\`UPDATE wallets SET … WHERE …\`;  // allow-direct-mutation: <reason>`. That works for short SQL; it doesn't work for multi-line `sql\`...\`` blocks where the keyword (`INSERT INTO idempotency_keys`) lives 2 lines below the opening backtick — `//` is not a Postgres comment marker, so the opt-out cannot live inside the template literal.
+
+**Why it matters:** Slice 8.1b is the first slice introducing protected-table mutations from outside `packages/wallet/`. The lint mechanism (slice 7) was designed before this idiom appeared. Picking the opt-out shape now sets the convention for every future cross-cutting middleware that mutates protected tables (e.g., a future audit-log middleware, deidentify queue, etc.). The choice cascades:
+
+- **Failure semantics:** the wrong choice silently disables the lint over a wider surface than intended.
+- **Reviewer signal:** per-statement opt-out reads as "this specific write is M1-authorized"; per-file opt-out reads as "trust this whole file." The granularity choice changes what a code review must catch.
+- **Idiom alignment:** TS engineers reach for `// biome-ignore-next-line` / `// eslint-disable-next-line` patterns. A bocek-internal lint that diverges from this convention pays a memory tax.
+
+**Engineering substance at stake:**
+- **Concurrency / cascade:** future middlewares with multi-line SQL (audit log, outbox dispatcher, reaper) hit the same shape. Resolving once via lint-script change vs. case-by-case via SQL-restructure compounds.
+- **Observability:** per-statement opt-outs leave reviewable annotations near the write site. Per-file allowlist hides the M1-trigger event from grep.
+- **Reversibility:** widening the script (option a/b) is reversible (revert the script change). Per-file allowlist (option d) accumulates entries and is harder to walk back without auditing each excluded file.
+
+**Unvetted options** (from training data + ecosystem convention — labeled, NOT recommendations):
+
+(a) **Widen lint to honor `// allow-direct-mutation:` on the line *immediately preceding* the hit, in addition to same-line.** Mirrors `// biome-ignore-next-line` / `// eslint-disable-next-line` convention. ~5 line script change. Per-statement granularity preserved. (Idiom-cited via biome / eslint; no external production cite for this exact lint.)
+
+(b) **Widen lint to honor the comment within N=2 or N=3 lines preceding the hit.** Generalizes (a). More forgiving but introduces a "how far back does it look" knob that doesn't exist today and could swallow opt-outs intended for a different statement. (No external cite.)
+
+(c) **Restructure middleware to inline single-line SQL templates.** Lint script unchanged. Hurts readability of ~5-line SQL; not how Drizzle SQL templates are typically written in `[[backend-stack]]`-cited reference projects (Cal.com / Better Auth use multi-line for non-trivial SQL). (Anti-idiom for the stack.)
+
+(d) **Add `apps/backend/src/idempotency/` to EXCLUDE_PREFIXES** alongside `packages/wallet/`. Treat the file as a known M1-trigger boundary. Loosest discipline: per-statement annotations disappear inside the excluded directory. (No external cite.)
+
+### To resolve
+
+`/design` — picks the shape with engineering-substance pass + idiom citation. The decision likely lands as a small amendment to `[[wallet-mechanics]]` Amendment Part 1 A1 (the lint mechanism is named there) OR a new short entry `[[direct-mutation-lint-opt-out-shape]]`. Once vaulted, slice 8.1b resumes as a quote-and-execute pass: implement the lint-script change per the picked option, re-run `check:direct-mutation`, advance.
+
+`/implementation` (this seat) flagged the gap rather than picking inline because the cluster of forks above includes a granularity-vs-discipline tradeoff (per-statement vs per-file) that the contract doesn't pin and the codebase will inherit forward.
+
+---
+
+---
+
+## GAP 10 RESOLVED 2026-05-10 — `[[direct-mutation-lint-opt-out-shape]]` LANDED
+
+Decision vaulted at `.bocek/vault/_shared/direct-mutation-lint-opt-out-shape.md` as **(β) N=1 lookback + dual `//`/`--` recognition** per `[[direct-mutation-lint-opt-out-research]]`. `scripts/check-direct-wallet-mutation.ts` accepts the opt-out comment on the SQL line OR the line immediately preceding (N=1 lookback) AND recognizes both TS `//` and Postgres `--` comment-marker forms. Per-statement granularity preserved; `[[reaper-schedule-deferral]]` line 57 contract intact. (α) range markers rejected on granularity-loss attack; (γ) rewrite-to-query-builder rejected on generality (lint should be SQL-idiom-agnostic); (a) K=2 lookback falsified by research F1 (no production lint tool ships K>1 lookback as primary directive); (d) per-file EXCLUDE_PREFIXES rejected earlier for contradicting `[[reaper-schedule-deferral]]`.
+
+**/implementation resumes slice 8.1b** as a quote-and-execute slice with no remaining design gaps: ~3-line script change (regex alternation + N=1 lookback function) + reposition the on-disk middleware opt-out comments from outside the template to inside as `--` Postgres comments on the line immediately above each SQL keyword + failure-message tail updated to name both placement options + script header comment updated with multi-line worked example. Re-run `check:direct-mutation`, smoke-test against local-docker, code self-attack archetypes, checkpoint LANDED.
+
+---
+
+## Summary (updated 2026-05-10 — 10 gaps total, gaps 1–7 resolved 2026-05-04; gap 8 deferred-and-downgraded; gap 9 RESOLVED 2026-05-09 via `[[wallet-http-contract]]`; gap 10 RESOLVED 2026-05-10 via `[[direct-mutation-lint-opt-out-shape]]`)

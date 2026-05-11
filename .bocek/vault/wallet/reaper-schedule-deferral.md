@@ -8,6 +8,22 @@ confidence: high
 
 # Defer scheduling of `idempotency_keys_reaper()` until first production write to `idempotency_keys`
 
+## Resolution 2026-05-11 — DEFERRAL CLOSED
+
+**Trigger fired 2026-05-10** — slice 8.1b shipped the HTTP idempotency middleware at `apps/backend/src/idempotency/middleware.ts` with three `// allow-direct-mutation: idempotency-middleware` opt-out comments (per `[[direct-mutation-lint-opt-out-shape]]` (β) N=1 lookback shape). The mechanical primary trigger documented in §Trigger below fired exactly as specified — the per-statement opt-out PR was the trigger event. (production-cited / high — git log + `bun run check:direct-mutation` output verifiable in repo.)
+
+**Pick: option (a) pg_cron** — landed in slice 8.1.5 on 2026-05-10 per `[[reaper-schedule-research]]` F2 (dashboard-enable-then-Drizzle-migrate) + F3 option 3 (single composite function, single schedule) + F7 (run-as postgres role). Three artifacts shipped:
+- `compose/postgres-init/01-extensions.sql` — `CREATE EXTENSION IF NOT EXISTS pg_cron` under postgres role at init time. Closes the §Open Threads "Cascade to `[[local-docker]]`" item.
+- `packages/db/drizzle/0009_idempotency_reaper_composite.sql` (~85 lines) — `CREATE OR REPLACE FUNCTION idempotency_keys_reaper(p_max_age interval DEFAULT '24 hours')` extends the slice 6 body with a second `DELETE FROM cron.job_run_details WHERE start_time < NOW() - INTERVAL '7 days'` (composite-reaper per F3); then `SELECT cron.schedule('idempotency_reaper', '0 * * * *', 'SELECT idempotency_keys_reaper();')`.
+- `packages/db/scripts/smoke-reaper.ts` — `test6_composite_cron_log_reaper()` verifies pre-flight extension check, seeds 3 rows in `cron.job_run_details` with explicit high runids, calls reaper, asserts -10d + -8d rows deleted, -3d row survives. 6/6 green.
+
+**Open debt carried (NOT closed by this resolution):**
+- **(deploy-runbook, owed)** Per-env one-time Supabase dashboard step (Integrations → Cron → enable, OR `CREATE EXTENSION pg_cron` from SQL Editor as postgres) per `[[reaper-schedule-research]]` F2 — migration-only path is broken on managed Supabase per CLI Issues #647/#1591/#4163.
+- **(monitoring cascade, owed)** Failed-run alerting on `cron.job_run_details WHERE jobid=<reaper_jobid> AND status='failed'` per `[[reaper-schedule-research]]` operational implication 3. Ad-hoc weekly check via `psql` is the manual mitigation until wired.
+- **(first-deploy verification, owed)** Verify `extensions.grant_pg_cron_access` grants postgres DELETE on `cron.job_run_details` on managed Supabase. Likely true per F2 inference; not directly cited.
+
+The deferral entry below stands as the historical record of why the schedule was NOT shipped at slice 6. The resolution above records what landed at slices 8.1b (trigger) + 8.1.5 (schedule). Future readers find the trigger contract in §Trigger; the resolution contract here.
+
 ## Decision
 
 Slice 6.5 stays queued. The `idempotency_keys_reaper(p_max_age interval DEFAULT '24 hours')` function from slice 6 is in place and callable from any context (smoke test, ops command, a future schedule); **no schedule is wired today**. The schedule lands when a production code path first writes to `idempotency_keys` — that moment is grep-detectable and CI-detectable.

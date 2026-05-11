@@ -173,6 +173,32 @@ Three positions:
 
 `[[wallet-mechanics]]` Amendment Part 1 A6 names *"a pure-function `sqlstateToError(code, message)` lookup"*. The *"lookup"* phrasing implies a single-class output, not a class registry. (docs-cited / high.)
 
+#### Fork 2 amendment 2026-05-11 — explicit defense of STRING typing for numeric `details` fields per `[[error-detail-numeric-serialization-research]]`
+
+`ErrorDetails` for `BC010` carries `requested: string; available: string` (lines 76-79 above). `BC022` carries `requested: string` (UUID — different semantic). The STRING typing for numeric fields was inherited from postgres-js's default `NUMERIC → string` mapping + regex-parsing of RAISE EXCEPTION text in `sqlstate-to-error.ts:45`; the ORIGINAL Fork 2 derivation never explicitly defended STRING-vs-NUMBER for these fields. /design seat 2026-05-11 attempted Stripe `unit_amount_decimal: string` as a precedent; /research falsified the cite as class-mismatched (resource amount field, not error detail field). This amendment lands the explicit defense after research-cited reframing.
+
+**Decision: keep STRING typing for `requested`/`available` in `BC010` (and any future numeric `BC` detail fields).** Justified by:
+
+1. **Customer-profile divergence.** Production payment-API convention (Stripe + Square + PayPal, all surveyed in `[[error-detail-numeric-serialization-research]]` F1) ships ZERO structured numeric fields in error envelopes — categorical decline codes only, refetch related resource for state. **That convention optimizes for end-user-facing error UX.** BokChoy's wallet SDK customer is **game designers during development** — debug-time numeric snapshot at error point matters more than refetch-on-display. Per-code structured detail fields are the right shape for developer-facing SDK error UX. Defensible bespoke; named winning condition for the divergence is the customer-profile axis. (production-cited / 0 in this exact shape; first-principles + customer-profile divergence; confidence: medium.)
+
+2. **Postgres NUMERIC(20,4) precision preservation.** `[[wallet-mechanics]]` §3 schemas `wallets.balance` + `transactions.amount` as `NUMERIC(20,4)` — max value 9999999999999999.9999, deliberately over-provisioned past JS-safe-integer (2^53-1 ≈ 9007199254740991) for future real-money cashout per *Revisit when* on this entry. STRING preserves precision past 2^53 without forcing customers to commit to BigInt or decimal.js at the SDK boundary if their values stay safe. NUMBER would silently lose precision: `Number("9999999999999999.0000")` → `10000000000000000` (off-by-one). `[[wallet-http-contract]]` G1 caps INPUT amounts at MAX_SAFE_INTEGER, but database column is over-provisioned vs the input cap. (docs-cited / high — postgres-js native NUMERIC mapping + JS Number safe-integer arithmetic.)
+
+3. **Reversibility-asymmetry favors STRING.** Information-rich → information-poor is a one-way wire-shape transition: dropping `requested`/`available` from BC010 is a breaking-but-tractable change pre-customer (ZERO customer SDK consumes this today); adding them back later requires versioned bump. NUMBER → STRING is also breaking. STRING → NUMBER is breaking on type. **Keeping STRING preserves all three optionality paths**: (a) drop fields entirely (Stripe-style) if customer profile shifts; (b) flip to NUMBER if precision concern is moot AND customer-SDK-ergonomic complaint surfaces; (c) keep STRING long-term if precision matters or DX confirms STRING is fine. NUMBER preserves only (a) + (c-NUMBER).
+
+**Rejected alternatives:**
+
+- **(X) Stripe-style — drop structured numeric fields entirely; numerics in `message` only; customer refetches related resource.** Production-cited × 3 (Stripe + Square + PayPal). Wins when: end-user-facing error UX is the primary consumer profile. **Why not here:** customer profile differs (developer-facing SDK during dev; refetch-per-debug-iteration is friction designers feel that end-users don't). Revisit-when: customer profile shifts to player-facing API where end-users see error JSON directly without SDK mediation.
+- **(Y) RFC 7807/9457 — inline numerics as JSON NUMBER.** Spec-cited × 1 (canonical example `balance: 30`). Wins when: RFC 7807 envelope shape is adopted overall AND amounts stay safely within JS-safe integer. **Why not here:** `[[wallet-http-contract]]` G5 already rejected the full RFC 7807 envelope shape in favor of Stripe-wrapped; cherry-picking the inline-numeric-as-NUMBER convention from a rejected envelope is incoherent. Also: NUMBER introduces precision risk per (2) above.
+
+**Revisit-when triggers (specific):**
+
+- **Customer profile shifts to player-facing API.** Players see error JSON directly without SDK mediation; categorical-only-with-refetch becomes the right ergonomic. Reopen and re-evaluate (X).
+- **Customer SDK ergonomic complaint surfaces.** Designers explicitly report STRING parsing as friction in iterative debug AND BokChoy commits to acceptable-extra-round-trip-on-error. Flip to (X) at the SDK ergonomic milestone.
+- **Real-money cashout lands AND wallet amounts cross 2^53 in production.** STRING is validated by the precision case; NUMBER would have been wrong. (Trigger reinforces STRING; doesn't trigger reopening.)
+- **Future numeric `BC` detail field needs precision-past-2^53 explicitly** (e.g., a high-volume aggregate balance). Confirms STRING choice was right; doesn't trigger reopening.
+
+(Confidence: medium-high. Production-cited weight for "developer-facing-SDK customer profile + inline-numeric-string" is unsurveyed — payment-API survey was the closest comparable cohort. Game-economy-backend-SDK cohort survey — PlayFab, Firebase Game SDK, Epic Online Services, Unity Cloud Save — not done at /research budget. Open thread carried in `[[error-detail-numeric-serialization-research]]`.)
+
 ### Fork 3 — FK-violation 23503 dispatch: translate at wrapper (P)
 
 Two positions:

@@ -310,6 +310,63 @@ Q4+Q5+Q6+Q7 amendments supersede:
 - *Cascade obligations* extended per Part 3 A17.
 - BCxxx SQLSTATE allocations extended per Part 3 A18.
 
+## Amendment 2026-05-11 (Part 4) — Slice 8.1 cluster cascade closures + ON CONFLICT canonical race-loser pattern
+
+Per slices 8.1a/b/c/.5/.6 LANDED 2026-05-10/11. Five cascade closures + one cross-reference to a new canonical pattern vaulted in `[[idempotency-strategy]]`. **No new design decisions in this amendment to wallet-mechanics itself** — Part 4 is a closure-aggregation pass for cascades that this entry's prior amendments named with `path TBD` or `to be wired in implementation phase` placeholders. The single new design decision (ON CONFLICT race-loser canonical pattern) lives in `[[idempotency-strategy]]` §Concurrency, not here, because the pattern is idempotency-domain semantics; cross-reference only.
+
+### A19. Part 1 A1 M1 boundary realized in `apps/backend`
+
+Part 1 A1 picked M1 (app-library + discipline) over M2 (stored-function-only privilege barrier) and named two cascade obligations: (a) CI lint script + (b) wallet-package boundary that wraps the M1 functions. Both shipped in slices 7.5 / 8.1b / 8.1c:
+
+- **CI lint** at `scripts/check-direct-wallet-mutation.ts` — 28 files scanned, opt-out shape per `[[direct-mutation-lint-opt-out-shape]]` (β) N=1 lookback + dual `//`/`--` recognition. Three opted-out hits live in `apps/backend/src/idempotency/middleware.ts` (cross-cutting middleware, slice 8.1b) — opt-outs use `--` Postgres comments inside the `sql\`...\`` template literals.
+- **Wallet-package boundary** at `packages/wallet/` — `walletCredit` / `walletDebit` wrappers are the canonical M1 mutation path. First HTTP-layer consumer at `apps/backend/src/wallet/index.ts` (slice 8.1c) — handlers call `withTenant(db, projectId, async (tx) => walletCredit(tx, params))`.
+
+A19 closes Part 1 A6's *"OTel mechanism cascade added: TS-side OTel-span helper in the wallet-package boundary"* phrasing — the helper is `tracer.startActiveSpan('wallet.credit'/'wallet.debit', { attributes: ... })` invoked manually inside the handler per `[[wallet-http-contract]]` slice 8.1c spec.
+
+### A20. Part 1 A3 OTel three-layer mechanism — layer 1 path resolved
+
+Part 1 A3 named three observability layers: (1) OTel spans at the app/wrapper boundary, (2) `RAISE LOG` structured Postgres-server-log lines, (3) `pg_stat_statements`. Layer 1 was framed as *"three-layer realistic mechanism"* without naming the OTel SDK pick. Slice 8.1b resolved:
+
+- **SDK** — `@opentelemetry/sdk-node` + `@opentelemetry/exporter-trace-otlp-http` + `@hono/otel` + `@opentelemetry/semantic-conventions` per `[[otel-stack-research]]` F1 (Bun + auto-instrumentation broken; manual SDK works) + F2 (`@hono/otel` is honojs-org middleware that sidesteps shimmer-patching).
+- **Bootstrap file** — `apps/backend/src/telemetry.ts` (52 LOC). Side-effect import at `apps/backend/src/index.ts:28` ensures the SDK initializes before any other module loads.
+- **Span emission** — manual `tracer.startActiveSpan('wallet.credit'/'wallet.debit', { attributes: 'db.system'/'db.operation'/'bokchoy.project_id'/'bokchoy.wallet_id'/'bokchoy.amount'/'bokchoy.currency_id'/'bokchoy.reason_code' })` inside the handler with `try { ... } catch (err) { span.recordException(err); span.setStatus({ code: ERROR }); throw } finally { span.end() }` lifecycle per `[[wallet-http-contract]]` slice 8.1c spec.
+
+Layers 2 + 3 stay queued — no slice has shipped `RAISE LOG` lines from inside `wallet_credit`/`wallet_debit` plpgsql bodies, and `pg_stat_statements` enablement is a deploy-time toggle on the Postgres host (Supabase enables it by default per `[[host-platform]]`).
+
+### A21. Part 1 A6 SQLSTATE convention — TS-side `WalletError` `path TBD` resolved
+
+Part 1 A6 said *"TS-side error-class hierarchy (`WalletError` base + `InsufficientFundsError extends WalletError` etc.) mapped from BCxxx codes via a pure-function `sqlstateToError(code, message)` lookup. Pinned at `packages/db/src/wallet-errors.ts` (path TBD)."* The path resolved to `packages/wallet/src/` (NOT `packages/db/`):
+
+- **`packages/wallet/src/`** — `WalletError` base + per-code subclasses (`InsufficientFundsError` BC010, `WalletNotFoundError` BC021, `CurrencyMismatchError` BC022, `ReasonCodeNotRegisteredError` BC050, etc.) per slice 7 ("@bokchoy/wallet wrappers + WalletError hierarchy + sqlstateToError"). Pure-function `sqlstateToError(code, message)` lookup at the wrapper entry point translates Postgres SQLSTATE into typed TS errors.
+- **HTTP wire shape** — `apps/backend/src/infra/error-middleware.ts` translates `WalletError` instances into Stripe-wrapped `{ error: { code, message, ...details } }` envelope per `[[wallet-http-contract]]` G5 (X). BCxxx → HTTP map verbatim from §SQLSTATE: BC001→409, BC002→422, BC010→422, BC020→500, BC021→422, BC022→422, BC030→422, BC040→500, BC050→422, BC060→422.
+
+The `packages/db/src/wallet-errors.ts` path Part 1 A6 forecast is **superseded** — error classes co-locate with the wrapper package (`packages/wallet/`) rather than the db package, because the wrappers own the SQLSTATE-to-error translation and `@bokchoy/wallet` consumers receive typed errors directly. (production-cited / high — slice 7 commit `934b990` + slice 8.1c commit visible in `git log`.)
+
+### A22. Part 3 A18 BC050 path closed end-to-end
+
+Part 3 A18 added BC050 ReasonCodeNotRegistered with the note *"FK violation; Postgres raises 23503; function may catch and re-raise as `BC050` for typed TS-side handling, or let 23503 propagate and TS dispatches on it directly. Decision deferred to /implementation; both work."* Slice 8.1c verified end-to-end:
+
+- **Path picked: TS dispatches on 23503 directly.** `sqlstateToError` translates Postgres `23503` → `ReasonCodeNotRegisteredError` (BC050) at the wrapper entry. Confirmed by `/tmp/smoke-8-1c.sh` Test 10 — credit with unknown reason_code returns 422 with `{ "error": { "code": "BC050", "message": "...", "constraintName": "transactions_project_reason_code_fk" } }`.
+- **No plpgsql catch+re-raise.** The composite FK fires natively at Postgres; the function body doesn't intercept. Simpler, fewer code paths, matches the documented "both work" framing — the lighter option won.
+
+### A23. Cascade obligations updated
+
+Adding/closing obligations on the existing list:
+
+- **§Cascade obligations item #5 (CI lint)** — **CLOSED** via `scripts/check-direct-wallet-mutation.ts` (slice 7.5) + `[[direct-mutation-lint-opt-out-shape]]` (slice 8.1b). The opt-out shape (β) accommodates cross-cutting middleware that legitimately mutates protected tables.
+- **Part 1 A6 OTel cascade** — **CLOSED via A20 above** (apps/backend/src/telemetry.ts + manual `tracer.startActiveSpan` in handlers).
+- **Part 1 A6 SQLSTATE TS-side path** — **CLOSED via A21 above** (`packages/wallet/src/` co-location, not `packages/db/`).
+- **Part 3 A17 `staged_jobs` CHECK constraint** for `'idempotency_reaper'` kind — **NOT NEEDED**. Slice 8.1.5 picked pg_cron (option a) per `[[reaper-schedule-deferral]]` Resolution 2026-05-11; the staged_jobs path (option b) was not taken. The CHECK constraint amendment in Part 3 A17 is therefore moot; if the outbox-worker path ever ships for other reasons (webhook fire-out, IAP receipt validate), the `'idempotency_reaper'` kind can be added at that time.
+- **NEW: per-env pg_cron bootstrap step** owed at deploy time. Documented in `[[reaper-schedule-deferral]]` Resolution 2026-05-11 §Open debt carried.
+- **NEW: failed-run pg_cron alerting** owed when first observability slice ships. Documented in same.
+- **NEW: `[[idempotency-strategy]]` §Concurrency canonical race-loser pattern** referenced — `INSERT ... ON CONFLICT (project_id, idempotency_key) DO NOTHING RETURNING id` + re-SELECT + dispatch. Future cross-cutting middleware authors that write to UNIQUE-constrained protected tables (audit-log, outbox, DSR queue, rate-limit bucket writers) re-use this shape; if/when a second consumer ships, promote the pattern to its own `[[upsert-race-loser-pattern]]` entry per `[[idempotency-strategy]]` §Concurrency Generalization note.
+
+### Confidence note on Part 4
+
+Part 4 is closure aggregation — every claim is **production-cited / high** (verifiable by `git log` + `bun run typecheck` + `/tmp/smoke-8-1{a,b,c,.6}.sh` transcripts in repo). The single new design decision (ON CONFLICT canonical race-loser pattern) lives in `[[idempotency-strategy]]` §Concurrency with its own evidence labels (docs-cited / high for the SQL idiom; production-cited / medium for Brandur schema-implied; production-cited / high for BokChoy slice 8.1.6 empirical verification).
+
+The original entry's body sections below stand as written. Q4 amendments do NOT supersede §3-§8 or any prior amendment.
+
 ## Decision
 
 ### 1. Source-of-truth model (path B)
