@@ -1,10 +1,5 @@
 // Idempotency-Key middleware per [[wallet-http-contract]] G4 +
-// [[idempotency-strategy]] D2-α. Slice 8.1b.
-//
-// **Trips [[reaper-schedule-deferral]] reopen trigger** — first non-test/non-
-// script writer to idempotency_keys lives here. The pg_cron reaper schedule
-// lands in slice 8.1.5 follow-on (deferred per user; pre-launch accumulation
-// risk is zero — reaper is ad-hoc callable today).
+// [[idempotency-strategy]] D2-α.
 //
 // CONTRACT (verbatim from [[wallet-http-contract]] 8.1b item 3):
 //   • Header `Idempotency-Key`, ≤255 chars ASCII (RFC 8941 Structured Header
@@ -35,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { withTenant } from '@bokchoy/db';
 import { sql } from 'drizzle-orm';
 import { createMiddleware } from 'hono/factory';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { db } from '../infra';
 
 const HEADER_NAME = 'Idempotency-Key';
@@ -254,7 +250,7 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
     );
   }
   if (decision.kind === 'replay') {
-    return c.json(decision.body, decision.status as Parameters<typeof c.json>[1]);
+    return c.json(decision.body, decision.status as ContentfulStatusCode);
   }
 
   // Proceed: run the handler, then capture + persist the response.
