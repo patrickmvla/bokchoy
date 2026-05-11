@@ -7,7 +7,14 @@ created: 2026-05-11
 
 # Implementation gaps flagged during slice 8.2.0 (admin-auth-surface primitive)
 
-## Gap 1 — Integration test path vs project convention (2026-05-11)
+## Gap 1 — Integration test path vs project convention (2026-05-11) — RESOLVED 2026-05-11
+
+**Resolution:** option (a) ratified. `[[admin-auth-surface]]` *Mitigations* row 4 amended in place — integration smoke now lives at `/tmp/smoke-8-2.0-admin-gate.sh`, shipped alongside slice 8.2.1 first consumer. Test scope expanded from 3-positive + 4-negative to 3-positive + 6-negative (one per BC4xx outcome) per Gap 2's granular allocation. Project convention (shell smoke for HTTP-middleware end-to-end testing, slice 8.1a/b/c/.6 precedent) preserved; in-tree `.test.ts` reserved for pure-logic units only.
+
+---
+
+### Original gap report below (preserved for historical context)
+
 
 **Missing decision:** the contract names `apps/backend/src/admin/admin-gate.test.ts` for "3 positive + 4 negative" integration tests per `[[admin-auth-surface]]` *Mitigations* row 4. The project's actual HTTP-middleware end-to-end test convention is shell smoke scripts at `/tmp/smoke-8-*.sh` exercising the running backend (per slice 8.1a/b/c/.6 implementation history; `bun:test` is used for pure-logic units only — single example at `packages/wallet/src/sqlstate-to-error.test.ts`).
 
@@ -25,7 +32,22 @@ created: 2026-05-11
 
 **Block status:** slice 8.2.0 implementation can ship with (a) accepted as the resolution; deferring slice 8.2.1 smoke is a continuation of the BokChoy slice-8.1 cluster pattern (middleware slices ship without their own integration smoke; the first consumer slice carries the end-to-end test).
 
-## Gap 2 — BC4xx wire-code namespace not vaulted in `[[wallet-mechanics]]` A18 (2026-05-11)
+## Gap 2 — BC4xx wire-code namespace not vaulted in `[[wallet-mechanics]]` A18 (2026-05-11) — RESOLVED 2026-05-11
+
+**Resolution:** (β) granular per-outcome ratified. `[[wallet-mechanics]]` Part 3 A18 amended in place with new "Amendment 2026-05-11" section reserving BC400-BC499 for auth/authorization and allocating BC400 AdminContextMissing / BC401 AdminUnauthenticated / BC402 AdminInvalidInput / BC403 AdminCrossOrgForbidden / BC404 AdminNotAMember / BC405 AdminInsufficientPermissions. (α) broad-stroke rejected on internal-consistency drift (10 existing BC codes are one-code-per-outcome) + customer-profile axis from `[[wallet-http-contract]]` G5 amendment + asymmetric reversibility (drop unused codes is cheap; consumer-migration if codes split later is not).
+
+`[[admin-auth-surface]]` *Decision* contract amended in place — steps 1-5 now reference the granular codes. *Failure mode* reference updated BC403 → BC405.
+
+**Cascade obligation queued for slice 8.2.1 prep** (~15 LOC across 2 files):
+- `apps/backend/src/admin/admin-gate.ts`: 3× BC400 split → BC400 + 3× BC402; 3× BC403 split → BC403 + BC404 + BC405.
+- `apps/backend/src/infra/error-middleware.ts`: extend BC_TO_HTTP map with BC400→400, BC401→401, BC402→400, BC403→403, BC404→403, BC405→403 (documentary; not load-bearing for adminGate flow).
+
+**Revisit-when:** 90-day post-launch telemetry showing BC403/BC404/BC405 always flow through the same SDK handler with no per-code branching → drop unused codes.
+
+---
+
+### Original gap report below (preserved for historical context)
+
 
 **Missing decision:** `[[admin-auth-surface]]` introduces BC400/BC401/BC403 error codes for the admin gate; the formal namespace allocation lives in `[[wallet-mechanics]]` Part 3 A18 (existing convention covers BC001-BC099 for wallet/inventory/idempotency primitives + BC050 ReasonCodeNotRegistered + BC060 CurrencyNotFound). The `[[admin-auth-surface]]` *Open threads* row 3 names this as a queued amendment.
 

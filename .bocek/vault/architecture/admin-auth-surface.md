@@ -39,16 +39,16 @@ The existing `owner` and `member` Better Auth defaults remain. `member.role === 
 
 **Contract — `adminGate({ resource, actions })` middleware.** The middleware's 5-step gate:
 
-1. Validate Better Auth session via `auth.api.getSession({ headers: c.req.raw.headers })`. If null → 401 BC401 (unauthenticated).
-2. Resolve org: `ctx.body.organizationId ?? ctx.query.organizationId ?? session.session.activeOrganizationId`. If null → 400 BC400 (`organization_context_missing`).
-3. **BokChoy-side tenancy check** (per `[[multi-tenant-rls-research]]` + `[[backend-stack]]` §5): if the route operates on a `project_id`, JOIN `projects` and verify `project.organization_id === resolvedOrgId`. Mismatch → 403 BC403 (`cross_org_forbidden`).
-4. Look up member: `db.select().from(member).where(and(eq(member.userId, session.user.id), eq(member.organizationId, resolvedOrgId)))`. Empty → 403 BC403 (`not_a_member`).
-5. Permission check: `auth.api.hasPermission({ headers: c.req.raw.headers, body: { permissions: { [resource]: actions } } })`. False → 403 BC403 (`insufficient_permissions`).
+1. Validate Better Auth session via `auth.api.getSession({ headers: c.req.raw.headers })`. If null → 401 **BC401 AdminUnauthenticated**.
+2. Resolve org: `ctx.body.organizationId ?? ctx.query.organizationId ?? session.session.activeOrganizationId`. If null → 400 **BC400 AdminContextMissing**. If present but not a valid UUID, OR (when `projectIdParam` is set) the URL param is missing / malformed UUID → 400 **BC402 AdminInvalidInput**.
+3. **BokChoy-side tenancy check** (per `[[multi-tenant-rls-research]]` + `[[backend-stack]]` §5): if the route operates on a `project_id`, JOIN `projects` and verify `project.organization_id === resolvedOrgId`. Mismatch (or project does not exist) → 403 **BC403 AdminCrossOrgForbidden**.
+4. Look up member: `db.select().from(member).where(and(eq(member.userId, session.user.id), eq(member.organizationId, resolvedOrgId)))`. Empty (including race with concurrent org delete) → 403 **BC404 AdminNotAMember**.
+5. Permission check: `auth.api.hasPermission({ headers: c.req.raw.headers, body: { permissions: { [resource]: actions } } })`. False → 403 **BC405 AdminInsufficientPermissions**.
 6. Set `c.set('member', member)` + `c.set('org', org)` + `next()`.
 
 The Hono `Variables` generic carries `{ member: Member; org: Organization }` so handler bodies type-cannot-run without verified admin context. Per `idioms/typescript.md` *Make impossible states unrepresentable*.
 
-Error codes BC400/BC401/BC403 added to BokChoy's existing BC-namespace per `[[wallet-mechanics]]` A18 SQLSTATE/wire-code convention (reserves BC400-BC499 for auth/authorization).
+Error codes BC400-BC405 allocated in `[[wallet-mechanics]]` Amendment 2026-05-11 — BC400-BC499 reserved for auth/authorization, one code per semantic outcome matching the existing BCxxx convention. Granular allocation (vs broad-stroke BC400/BC401/BC403 that shipped in slice 8.2.0's initial admin-gate.ts) defended on (a) internal consistency with 10 existing BC codes, (b) customer-profile axis from `[[wallet-http-contract]]` G5 amendment (developer-facing SDK during dev — snapshot-at-error matters), (c) asymmetric reversibility (drop unused codes is cheap; consumer-migration if codes split later is not).
 
 ## Reasoning
 
@@ -133,7 +133,7 @@ The structure is extension-ready: each new admin endpoint adds one `as const` li
 
 ## Failure mode
 
-**Primary failure mode: `member.role` set to a string that doesn't exist in the static `roles` config.** If `member.role = "admin"` but `createAuth()` only registers `roles: { compliance: ... }` (typo or missed migration after a role rename), `hasPermission` returns `false` for every check and the customer-developer is locked out of every admin endpoint silently — observable only as a sustained 403 BC403 rate per org.
+**Primary failure mode: `member.role` set to a string that doesn't exist in the static `roles` config.** If `member.role = "admin"` but `createAuth()` only registers `roles: { compliance: ... }` (typo or missed migration after a role rename), `hasPermission` returns `false` for every check and the customer-developer is locked out of every admin endpoint silently — observable only as a sustained 403 BC405 rate per org.
 
 Likelihood: low-medium. The static-AC path makes this a startup-time observable: `createAccessControl({...})` + `roles: {...}` is one config object; CI lint can assert that every `member.role` value found in the production `member` table is a key in the `roles` config (post-deploy verification, not pre-deploy because the data lives in the DB).
 
@@ -148,7 +148,7 @@ Likelihood: low. BokChoy's existing middlewares set distinct keys (`apiKey`, `pr
 - **CI lint for role consistency.** Post-migration smoke that queries `SELECT DISTINCT role FROM member` and asserts every value is a key in the `roles` config object exported from `packages/auth-config/src/index.ts`. Add to `scripts/check-auth-roles.ts` (new file, ~30 LOC). Run in deploy pipeline after migrations apply. Failure = deploy abort.
 - **Namespaced middleware context keys.** `adminGate` sets `c.set('admin.member', ...)` and `c.set('admin.org', ...)` with the `admin.` prefix. Hono `Variables` generic declares `{ 'admin.member': Member; 'admin.org': Organization }`. Eliminates collision class.
 - **Sustained 403 rate alerting.** Page on `auth.outcome != 'pass'` rate > 5% over 5min per project per the observability section above. Catches both adversarial probing AND role-misconfig within minutes.
-- **`adminGate` integration tests** with three positive cases (admin role passes, owner role passes, custom role with same permissions passes) and four negative cases (no session 401, missing org 400, cross-org project 403, member without permission 403). Lives at `apps/backend/src/admin/admin-gate.test.ts`. Cross-references the smoke test pattern from slice 8.1c.
+- **`adminGate` integration smoke** ships alongside slice 8.2.1 first consumer as `/tmp/smoke-8-2.0-admin-gate.sh`, exercising the full 5-step gate end-to-end against the running backend with real Better Auth sessions + seeded `member` / `organization` / `projects` rows. Three positive cases (admin role passes, owner role passes, custom role with the same permissions passes) and six negative cases — one per BC4xx code: BC400 missing org, BC401 no session, BC402 malformed UUID, BC403 cross-org project, BC404 member-removed-from-org, BC405 member without required permission. Project convention is shell smoke scripts at `/tmp/smoke-8-*.sh` for HTTP-middleware end-to-end testing (precedent: slices 8.1a/b/c/.6 each shipped this way); `bun:test` reserved for pure-logic units only (precedent: `packages/wallet/src/sqlstate-to-error.test.ts`). Amended 2026-05-11 per `[[gaps]]` Gap 1 resolution — the prior `apps/backend/src/admin/admin-gate.test.ts` path was a /design improvisation that didn't match the project's HTTP-middleware test convention.
 
 ## Idiom citations
 
@@ -169,4 +169,4 @@ Likelihood: low. BokChoy's existing middlewares set distinct keys (`apiKey`, `pr
 
 - **Path discrepancy cascade-cleanup.** `[[tenancy-ids-research]]:256`, `[[wallet-mechanics]]` A12 cascade, and several `state.md` entries reference `apps/auth-config/`. The actual workspace is `packages/auth-config/` (`packages/auth-config/src/index.ts` already present with `createAuth()` factory). One-pass amendment owed to those three vault entries during next /refactoring or /design cleanup pass.
 - **Production-cite gap for D2-(μ).** I have not source-walked a public B2B SaaS shipping Better Auth + Hono + middleware-factory admin gates. The (μ) defense rests on (a) BokChoy-internal precedent × 3 slices, (b) Hono first-class composition (docs-cited), (c) idiom `Make impossible states unrepresentable`. Strength: medium-high. Upgrade to high would require finding a Cal.com / Deel.com / MeetingBaas public source-walk showing the same shape. Out of scope this session; flag for a future /research pass if any constraint forces revisiting D2.
-- **BC400/BC401/BC403 error code allocation in `[[wallet-mechanics]]` A18** — extends the BC-namespace per the existing wire-code convention. Mechanical amendment to `[[wallet-mechanics]]` Part 3 A18 owed when the first admin handler ships (slice 8.2).
+- **~~BC400/BC401/BC403 error code allocation in `[[wallet-mechanics]]` A18~~** — RESOLVED 2026-05-11 per `[[gaps]]` Gap 2 resolution. BC400-BC499 reserved for auth/authorization in `[[wallet-mechanics]]` Amendment 2026-05-11. Allocated BC400 AdminContextMissing / BC401 AdminUnauthenticated / BC402 AdminInvalidInput / BC403 AdminCrossOrgForbidden / BC404 AdminNotAMember / BC405 AdminInsufficientPermissions — granular per-outcome (β-pick) defended on internal-consistency + customer-profile-axis + asymmetric-reversibility. Cascade obligation: ~15-LOC code amendment to `admin-gate.ts` + `error-middleware.ts` in slice 8.2.1 prep.

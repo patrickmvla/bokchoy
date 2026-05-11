@@ -293,6 +293,25 @@ Allocations within BCxxx range (Part 1 A5 + Part 2 A10 + Part 3 A18):
 
 Reserved range BC000-BC099 for wallet/inventory/idempotency primitives. Future features (loot, IAP, mailbox) get BC100+ blocks.
 
+### Amendment 2026-05-11 — BC400-BC499 reserved for auth/authorization (closes `[[gaps]]` Gap 2)
+
+Per `[[admin-auth-surface]]` cascade obligation: BC400-BC499 reserved for auth/authorization codes emitted by the `adminGate` Hono middleware and any future auth-surface primitives. Allocated:
+
+- **BC400 AdminContextMissing** — `organizationId` absent from body AND query AND `session.session.activeOrganizationId`. Maps to HTTP 400. Remediation: caller supplies org context.
+- **BC401 AdminUnauthenticated** — `auth.api.getSession()` returned null (no session cookie / token, OR session expired / revoked). Maps to HTTP 401. Remediation: log in / re-authenticate.
+- **BC402 AdminInvalidInput** — request shape violates expected wire format: `organizationId` or `projectId` is not a valid UUID, OR a required URL path param is missing. Maps to HTTP 400. Remediation: fix request shape. Distinct from BC400 because remediation is "fix the request" not "supply context".
+- **BC403 AdminCrossOrgForbidden** — project exists but `project.organization_id` differs from resolved `organizationId`. Cross-org breach attempt. Maps to HTTP 403. Remediation: stop the cross-org call OR verify the customer-developer's own project mapping.
+- **BC404 AdminNotAMember** — authenticated user has no `member` row in the resolved organization. Maps to HTTP 403. Remediation: add user to org (org-owner action) OR pick a different org.
+- **BC405 AdminInsufficientPermissions** — member row exists; `auth.api.hasPermission()` returned false. Member's role lacks the required permission for `(resource, actions)`. Maps to HTTP 403. Remediation: promote member to a role that grants the permission (org-owner action) OR ship a custom role via post-MVP RBAC plugin.
+
+Granularity rationale: one-code-per-semantic-outcome matches the existing BCxxx convention (every BC001-BC060 code = one outcome with distinct remediation). Customer-profile axis from `[[wallet-http-contract]]` G5 amendment applies — BokChoy is developer-facing SDK during dev; snapshot-at-error matters for debug. (production-cited / high — BokChoy internal precedent across 10 prior BC codes; confidence: high.)
+
+Revisit-when: 90-day post-launch telemetry showing BC403/BC404/BC405 outcomes always flow through the same SDK handler with no per-code branching → drop unused codes (asymmetric-reversibility favors keeping granularity now).
+
+Cascade obligations queued for /implementation (slice 8.2.1 prep, ~15 LOC across 2 files):
+- **`apps/backend/src/admin/admin-gate.ts`** — replace broad-stroke BC400/BC403 emissions with the granular codes above. Step 2 (org missing) → BC400; Steps 3a/3b (UUID malformed, URL param missing) → BC402; Step 3 (project.organization_id mismatch) → BC403; Step 4 (no member row, race with org delete) → BC404; Step 5 (`hasPermission` false) → BC405. Span attribute `auth.outcome` values remain the existing strings (`fail.401`, `fail.400`, `fail.403_cross_org`, `fail.403_not_member`, `fail.403_perm`) — those are observability tokens, not wire codes; coupling them to BC numbers would conflate two namespaces.
+- **`apps/backend/src/infra/error-middleware.ts`** — extend `BC_TO_HTTP` map with BC400→400, BC401→401, BC402→400, BC403→403, BC404→403, BC405→403. Documentary only; `adminGate` returns directly (matches `apiKeyMiddleware` / `idempotencyMiddleware` pattern) so the map isn't load-bearing for the gate flow. The map's role is single-source documentation of every BCxxx → HTTP-status mapping for the system.
+
 ### Confidence note on Part 3
 
 D11 picks (JSONB + NULL-until-locked) are **production-cited tier 1 + docs-cited tier 2** synthesis (Brandur source + Shopify docs + Postgres ON CONFLICT pattern). Confidence: high.
