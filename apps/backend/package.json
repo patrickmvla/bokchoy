@@ -11,6 +11,12 @@
   "dependencies": {
     "hono": "catalog:",
     "@hono/node-server": "catalog:",
+    "@hono/otel": "catalog:",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/sdk-node": "catalog:",
+    "@opentelemetry/exporter-trace-otlp-http": "catalog:",
+    "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/semantic-conventions": "catalog:",
     "@bokchoy/db": "workspace:*",
     "drizzle-orm": "catalog:"
   },

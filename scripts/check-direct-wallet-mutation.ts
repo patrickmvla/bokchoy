@@ -31,10 +31,31 @@
 //                              wraps the M1 functions (per Part 1 A1).
 //                              Mutations there ARE the M1 path.
 //
-// Per-line opt-out comment for genuine edge cases (e.g., a future migration
-// helper):
+// Per-statement opt-out comment for genuine edge cases (e.g., a future migration
+// helper, or cross-cutting middleware that mutates one specific protected table
+// for one specific reason). Placement per [[direct-mutation-lint-opt-out-shape]]:
 //
-//     await tx`UPDATE wallets SET … WHERE …`;  // allow-direct-mutation: <reason>
+//   (a) Single-line SQL — TS `//` comment on the SAME line as the SQL keyword:
+//
+//       await tx`UPDATE wallets SET … WHERE …`;  // allow-direct-mutation: <reason>
+//
+//   (b) Single-line SQL — TS `//` comment on the line IMMEDIATELY PRECEDING:
+//
+//       // allow-direct-mutation: <reason>
+//       await tx`UPDATE wallets SET … WHERE …`;
+//
+//   (c) Multi-line `sql`...`` template — Postgres `--` comment INSIDE the template,
+//       on the line IMMEDIATELY PRECEDING the SQL keyword (// can't live inside a
+//       template literal — it's string content, not TS):
+//
+//       const inserted = await tx.execute(sql`
+//         -- allow-direct-mutation: <reason>
+//         INSERT INTO idempotency_keys (...) VALUES (...) RETURNING id
+//       `);
+//
+// N=1 lookback only — opt-out covers the SAME line OR the line IMMEDIATELY
+// PRECEDING. Mirrors // biome-ignore-next-line / // eslint-disable-next-line /
+// // @ts-expect-error semantics. Production-cited × 3 (Biome / ESLint / TS).
 //
 // Run: `bun run check:direct-mutation`. Wired into CI alongside lint:check,
 // typecheck, and check:prepare-false.
@@ -83,7 +104,13 @@ function* walkTsFiles(dir: string): Generator<string> {
   }
 }
 
-const OPT_OUT_RE = /\/\/\s*allow-direct-mutation\b/;
+// Accepts TS `//` (outside templates) OR Postgres `--` (inside `sql`...`` templates,
+// where `//` is string content not a TS comment). Per [[direct-mutation-lint-opt-out-shape]].
+const OPT_OUT_RE = /(?:\/\/|--)\s*allow-direct-mutation\b/;
+
+function isOptedOut(lines: string[], i: number): boolean {
+  return OPT_OUT_RE.test(lines[i]) || (i > 0 && OPT_OUT_RE.test(lines[i - 1]));
+}
 
 interface Hit {
   path: string;
@@ -106,7 +133,7 @@ for (const root of SCAN_ROOTS) {
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
-      if (OPT_OUT_RE.test(line)) continue;
+      if (isOptedOut(lines, i)) continue;
 
       // Reset lastIndex per line for global regexes.
       SQL_RE.lastIndex = 0;
@@ -135,7 +162,13 @@ if (hits.length > 0) {
   console.error('through the M1 stored functions (wallet_credit, wallet_debit,');
   console.error('wallet_deidentify_player, bootstrap_project_reason_codes). See');
   console.error('[[wallet-mechanics]] Amendment Part 1 A1 + Part 3 A17.');
-  console.error('\nIf intentional, add `// allow-direct-mutation: <reason>` to the line.');
+  console.error(
+    '\nIf intentional, add `// allow-direct-mutation: <reason>` to the line or the line above',
+  );
+  console.error(
+    '(TS context), OR `-- allow-direct-mutation: <reason>` immediately preceding the SQL keyword',
+  );
+  console.error('inside the template literal.');
   process.exit(1);
 }
 

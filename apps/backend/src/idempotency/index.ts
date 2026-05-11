@@ -3,7 +3,8 @@
 // INSERT … ON CONFLICT into idempotency_keys, lock + replay, parameter-mismatch
 // detection via JSONB request_params (D11.1).
 //
-// First write to idempotency_keys from this module is the trigger event for
-// [[reaper-schedule-deferral]] — slice 6.5 reopens at that PR.
+// **Slice 8.1b — first non-test/non-script writer to idempotency_keys lands
+// here. Trips [[reaper-schedule-deferral]] reopen trigger; pg_cron reaper
+// schedule deferred to slice 8.1.5 follow-on.**
 
-export {};
+export { type IdempotencyContext, idempotencyMiddleware } from './middleware';
