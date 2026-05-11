@@ -11,6 +11,10 @@
 //      (function bypasses RLS via SECURITY DEFINER + BYPASSRLS owner).
 //   6. Custom interval — a 1-hour threshold reaps the in-between rows.
 //   7. Idempotent re-call — second call with same threshold returns 0.
+//   8. Composite cron.job_run_details cleanup — slice 8.1.5 extension. Old
+//      pg_cron run-detail rows (>7d) are deleted alongside idempotency_keys;
+//      recent rows survive. Verifies the [[reaper-schedule-research]] F3
+//      option-3 composite-reaper shape works against the actual cron schema.
 
 import postgres from 'postgres';
 
@@ -223,6 +227,72 @@ function eqSets<T>(a: Set<T>, b: Set<T>): boolean {
   return true;
 }
 
+// Slice 8.1.5 — composite reaper cleans cron.job_run_details. High runids
+// chosen above pg_cron's sequence range to guarantee no collision with
+// real scheduled-job history; cleanup filters by these specific runids so
+// the test never touches anything it didn't seed.
+const CRON_LOG_RUNID_OLD_10D = 9999999990n;
+const CRON_LOG_RUNID_OLD_8D = 9999999991n;
+const CRON_LOG_RUNID_RECENT_3D = 9999999992n;
+const CRON_LOG_TEST_RUNIDS = [
+  CRON_LOG_RUNID_OLD_10D,
+  CRON_LOG_RUNID_OLD_8D,
+  CRON_LOG_RUNID_RECENT_3D,
+];
+
+async function test6_composite_cron_log_reaper() {
+  // Pre-flight: verify pg_cron is installed in this database. If not, this
+  // environment is missing the slice 8.1.5 prerequisite — fail loudly per the
+  // migration's "fail at cron.schedule(...) on missing extension" contract.
+  const ext = await admin<{ installed: string | null }[]>`
+    SELECT installed_version AS installed
+    FROM pg_available_extensions
+    WHERE name = 'pg_cron'
+  `;
+  if (ext.length === 0 || ext[0].installed === null) {
+    fail(
+      `Test 6: pg_cron not installed in this database — slice 8.1.5 prerequisite missing. ` +
+        `Local-docker: re-init compose/postgres-init/01-extensions.sql via 'docker compose down -v && up'. ` +
+        `Managed Supabase: enable via Integrations → Cron in dashboard.`,
+    );
+    return;
+  }
+
+  // Cleanup any leftover seed rows from a prior crashed run before seeding.
+  await admin`DELETE FROM cron.job_run_details WHERE runid IN ${admin(CRON_LOG_TEST_RUNIDS)}`;
+
+  // Seed 3 rows: -10d, -8d (both should be reaped at 7d threshold), -3d (survives).
+  await admin.unsafe(
+    `INSERT INTO cron.job_run_details (runid, start_time, status, command, username) VALUES
+       ($1, NOW() - INTERVAL '10 days', 'succeeded', 'SELECT 1', 'postgres'),
+       ($2, NOW() - INTERVAL '8 days',  'succeeded', 'SELECT 1', 'postgres'),
+       ($3, NOW() - INTERVAL '3 days',  'succeeded', 'SELECT 1', 'postgres')`,
+    [
+      CRON_LOG_RUNID_OLD_10D.toString(),
+      CRON_LOG_RUNID_OLD_8D.toString(),
+      CRON_LOG_RUNID_RECENT_3D.toString(),
+    ],
+  );
+
+  await admin`SELECT idempotency_keys_reaper()`;
+
+  const surviving = await admin<{ runid: string }[]>`
+    SELECT runid::text AS runid FROM cron.job_run_details
+    WHERE runid IN ${admin(CRON_LOG_TEST_RUNIDS)}
+  `;
+  const survivingSet = new Set(surviving.map((r) => r.runid));
+  const expected = new Set([CRON_LOG_RUNID_RECENT_3D.toString()]);
+
+  if (eqSets(survivingSet, expected)) {
+    ok(`Test 6: composite reaper deleted -10d + -8d cron.job_run_details rows; -3d row survives`);
+  } else {
+    fail(`Test 6: surviving=${[...survivingSet].join(',')}, expected=${[...expected].join(',')}`);
+  }
+
+  // Cleanup any seeded row that survived so the next run starts clean.
+  await admin`DELETE FROM cron.job_run_details WHERE runid IN ${admin(CRON_LOG_TEST_RUNIDS)}`;
+}
+
 try {
   await setup();
   await test1_default_24h_reaper();
@@ -230,6 +300,7 @@ try {
   await test3_custom_short_interval();
   await test4_locked_and_pending_never_reaped();
   await test5_bypass_rls_via_app_role();
+  await test6_composite_cron_log_reaper();
 } finally {
   await teardown();
   await admin.end();
