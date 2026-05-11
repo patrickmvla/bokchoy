@@ -1,5 +1,129 @@
 ## Current state
-- **Mode:** implementation → slice 8.2.0 LANDED 2026-05-11 (`[[admin-auth-surface]]` primitive layer shipped; 5/6 cascade obligations satisfied; integration-tests obligation deferred to slice 8.2.1 first-consumer smoke per project convention; gap report at `.bocek/vault/architecture/gaps.md` flags two queued amendments + path cleanup)
+- **Mode:** implementation → slice 8.2.1 FULLY LANDED 2026-05-11 (`bootstrapProjectReasonCodes` consumer + integration smoke 11/11 passing + owner-role gap resolved per (a) + .env.example updated + bearer transport plugin enabled)
+- **Slice 8.2.1 LANDED 2026-05-11.** Six work units shipped this slice (BC4xx prep + handler + auth-config role extension + bearer plugin + env example + smoke):
+  - **BC4xx code cascade** at `apps/backend/src/admin/admin-gate.ts` + `apps/backend/src/infra/error-middleware.ts` per `[[wallet-mechanics]]` A18 Amendment 2026-05-11. Granular per-outcome emissions (BC400/BC401/BC402/BC403/BC404/BC405). Header doc comment block rewritten.
+  - **`apps/backend/src/wallet/index.ts`** — `bootstrapReasonCodesHandler` + mount on `POST /v1/projects/:projectId/bootstrap-reason-codes`. Chain: `adminGate({ resource: 'reasonCode', actions: ['bootstrap'], projectIdParam: 'projectId' })` → handler. OTel span `wallet.bootstrap_reason_codes`. No Idempotency-Key middleware — wrapper is naturally idempotent via SQL `ON CONFLICT DO NOTHING`.
+  - **`apps/backend/src/index.ts`** AppContext widened to `ApiKeyContext & IdempotencyContext & AdminContext`.
+  - **`packages/auth-config/src/index.ts`** — statements merged with Better Auth's `defaultStatements` from `better-auth/plugins/organization/access`; all three roles redefined ground-up: `adminRole` = Better Auth admin defaults + BokChoy customs; `ownerRole` = Better Auth owner defaults (admin + org-delete) + BokChoy customs per `[[admin-auth-surface]]` *Mitigations* row 4 (a); `memberRole` = Better Auth default (ac:read only, no BokChoy customs). Resolves the latent bug shipped in slice 8.2.0 where the original adminRole had REPLACED rather than EXTENDED Better Auth's default admin permissions.
+  - **Bearer plugin** added to `createAuth` plugins list — extends Better Auth's session sources from cookie-only to cookie+Bearer for scripted/server-to-server admin tools. Per `[[admin-auth-surface]]` D1 the gate is transport-agnostic; bearer adds a session source without changing gate logic. Required for shell smoke testing without HMAC-signed-cookie computation.
+  - **`.env.example`** — appended `BOKCHOY_BASE_URL` (required) + `BOKCHOY_TRUSTED_ORIGINS` (optional, commented) per slice 8.2.0 carry.
+  - **`/tmp/smoke-8-2.0-admin-gate.sh`** (NEW) — 11-test integration smoke per `[[admin-auth-surface]]` *Mitigations* row 4. Seeds user/organization/member/session/projects rows directly via SQL, boots backend on port 3299, runs curl tests with status+body assertions, verifies DB state post-suite.
+- **Verification:**
+  - **`bun run typecheck`** 6/6 packages green (auth-config + backend cache miss recompiled with new code; all others cached).
+  - **`bun run lint:check`** exit 0 (2 pre-existing wallet smoke-wrappers warnings only; ZERO from this slice).
+  - **`/tmp/smoke-8-2.0-admin-gate.sh` 11/11 PASS** — 3 positive (admin first call inserted:12, admin idempotent re-run inserted:0, owner role inserted:0) + 6 negative (BC401, BC400, BC402, BC403, BC404, BC405 each emitted at correct HTTP status) + 2 DB-state verifications (project A has 12 reason codes; project B has 0, cross-org BC403 prevented write).
+- **Self-attack pass:**
+  - **Boundary input** (malformed UUID) — BC402 emitted at HTTP 400 per smoke N3. ✅
+  - **Error path** (cross-org breach) — BC403 emitted at HTTP 403 per smoke N4. ✅
+  - **Concurrency hazard** (member-exists + org-deleted race) — BC404 emitted per contract step 4 explicit on race coverage. Not exercised by smoke (race-only); covered by contract review.
+  - **Idempotency** — admin second call returns `inserted:0` without erroring per smoke P2. ✅
+  - **Observability** — `auth.outcome` span values stamped per granular failure path. Verified via curl response codes corresponding to vault contract outcomes.
+  - **Anti-default review**: senior reviewer would catch (a) latent slice-8.2.0 bug where adminRole replaced rather than extended Better Auth defaults → fixed in this slice via ground-up role redefinition; (b) bearer plugin is now a session source — implications for production deploy: scripted/server-to-server tools can hold raw session tokens with no signing → operators must treat session.token values as bearer credentials (rotation policy owed but not blocking MVP).
+- **Cascade obligations status:**
+  - **#1 BC4xx admin-gate.ts split** ✅ LANDED.
+  - **#2 error-middleware.ts BC_TO_HTTP extension** ✅ LANDED.
+  - **#3 bootstrapProjectReasonCodes handler** ✅ LANDED.
+  - **#4 owner-role permission gap** ✅ RESOLVED per (a) — ownerRole extended.
+  - **#5 .env.example BOKCHOY_BASE_URL + BOKCHOY_TRUSTED_ORIGINS** ✅ LANDED.
+  - **#6 `/tmp/smoke-8-2.0-admin-gate.sh`** ✅ LANDED + 11/11 pass.
+- **New debt surfaced during slice 8.2.1:**
+  - **Bearer-token rotation runbook** — bearer plugin enables raw session-token credentials. Operators owe a rotation procedure (parallels `BOKCHOY_API_KEY_HMAC_SECRET` rotation runbook in slice-8.1a carry). NOT blocking MVP; defer to ops runbook pass.
+  - **Smoke shellcheck warnings** — 5 cosmetic warnings on `/tmp/smoke-8-2.0-admin-gate.sh` matching existing `/tmp/smoke-8-1*.sh` style. NOT blocking.
+- **Open / known debt (UNCHANGED):**
+  - All slice-8.1-era debt items still open.
+  - `[[gaps]]` Gap 3 (path discrepancy `apps/auth-config/` → `packages/auth-config/`) queued for /refactoring.
+- **Next on resume — recommended sequence:**
+  1. **Commit slice 8.2.1.** Working tree includes: BC4xx cascade + handler + AppContext widening + auth-config role extension + bearer plugin + .env.example update + state.md checkpoint. The `/tmp/smoke-8-2.0-admin-gate.sh` script is in /tmp (not tracked; smoke scripts live outside the repo per project convention).
+  2. **Slice 8.3** scope — pick next: `walletDeidentifyPlayer` (requires Q3 DSR research first per carry-forward), Better Auth cockpit route mount (mount `/api/auth/*` for cockpit slice consumers), first cockpit slice (greenfield), or address slice-8.1-era debt (deploy runbook, monitoring cascades, rotation runbooks).
+
+- **Mode (prior):** implementation → slice 8.2.1 HANDLER LANDED 2026-05-11 (`bootstrapProjectReasonCodes` route shipped; BC4xx cascade prep complete; smoke obligation deferred to next work unit with gap surfaced on owner-role permissions)
+- **Slice 8.2.1 work unit #1 (handler) LANDED.** Code changes:
+  - **`apps/backend/src/wallet/index.ts`** — added `bootstrapReasonCodesHandler` + `BootstrapAppContext = AdminContext`. Mounted `POST /v1/projects/:projectId/bootstrap-reason-codes` with `adminGate({ resource: 'reasonCode', actions: ['bootstrap'], projectIdParam: 'projectId' })` chain. Handler reads `projectId` from URL param (adminGate has validated UUID + cross-org tenancy + member + permission by entry), runs `bootstrapProjectReasonCodes` wrapper inside `withTenant(db, projectId, ...)` (RLS GUC scoping), emits OTel span `wallet.bootstrap_reason_codes` with `bokchoy.{project_id, organization_id, user_id, inserted_count}`, returns `{ inserted: number }` HTTP 200. No Idempotency-Key middleware — wrapper's `INSERT … ON CONFLICT DO NOTHING` makes it naturally idempotent (12 first call, 0 subsequent).
+  - **`apps/backend/src/index.ts`** — `AppContext` widened from `ApiKeyContext & IdempotencyContext` to also union `AdminContext` so handlers can typecheck against either middleware path.
+- **Slice 8.2.1 work unit #0 (BC4xx cascade prep) LANDED** earlier this session. Verified typecheck + lint clean.
+- **Verification:** turbo typecheck 6/6 green (backend cache miss recompiled with handler addition); biome lint exit 0 (2 pre-existing wallet smoke-wrappers warnings; ZERO from slices 8.2.0 / 8.2.1 cascade or handler).
+- **OPEN GAP surfaced during slice 8.2.1 handler implementation — owner role permissions.** `[[admin-auth-surface]]` *Mitigations* row 4 amendment (2026-05-11) names 3 positive cases including "owner role passes." Reality: `packages/auth-config/src/index.ts` exports `roles = { admin: adminRole }` — owner role retains Better Auth defaults (`ownerAc` per `access/statement.ts:21-27`) which include organization + member + invitation + team + ac CRUD but NOT BokChoy custom resources (`reasonCode`, `player`). Owner role would FAIL bootstrap with BC405 today.
+  - **Three resolutions surveyed (gap awaits user direction):**
+    - **(a) Extend auth-config to grant owner BokChoy-custom permissions.** Add `ownerRole = ac.newRole({ reasonCode: ['bootstrap'], player: ['deidentify'], organization: ['update', 'delete'], member: ['create', 'update', 'delete'], invitation: ['create', 'cancel'], team: ['create', 'update', 'delete'], ac: ['create', 'read', 'update', 'delete'] })` (superset of Better Auth's ownerAc + BokChoy admin permissions). Export `roles = { admin: adminRole, owner: ownerRole }`. Natural in B2B SaaS — owner = primary account = highest privilege. Smoke test "owner passes" then holds. ~6 LOC change.
+    - **(b) Vault as design decision: owner role does NOT inherit BokChoy custom permissions.** Amend `[[admin-auth-surface]]` *Mitigations* row 4 again to drop the "owner role passes" positive case + add owner-role-fails-BC405 negative case. Customer-developer orgs surface admin role as the sole privileged role at MVP. Defensible if the product intent is "owner manages org membership only, admin manages business operations."
+    - **(c) Vault as design decision: owner is shorthand for admin in single-role MVP.** Pass `roles = { admin: adminRole, owner: adminRole }` — owner is literally an alias for admin. Loses owner's ability to delete the org (Better Auth's `ownerAc.organization: ['update', 'delete']` would be overridden by adminRole's no-org-delete). Probably not what's intended.
+  - **My pick: (a).** Natural B2B SaaS pattern (org owner = primary account = should hold all admin permissions including bootstrap/deidentify + retain Better Auth's org-delete privilege). ~6 LOC. Smoke contract holds as amended.
+- **Slice 8.2.1 work unit #2 (smoke) — DEFERRED to next implementation pass** pending owner-role gap resolution. `[[admin-auth-surface]]` *Mitigations* row 4 amendment specifies `/tmp/smoke-8-2.0-admin-gate.sh` with 3 positive + 6 negative cases. Smoke is ~200 LOC bash including: schema reset (member/organization/session/user/project/reason_codes rows), Better Auth session seeding (user + session row with known token + cookie `better-auth.session_token=<token>`), backend boot with new env vars (BOKCHOY_BASE_URL + BOKCHOY_TRUSTED_ORIGINS), 9 curl tests with status+body assertions covering each BC4xx outcome + 3 positive role paths.
+- **Open / known debt (NEW after slice 8.2.1 handler):**
+  - **Owner-role-inherits gap** (above) — pick (a)/(b)/(c) before smoke ships.
+  - **`.env.example` additions owed** — `BOKCHOY_BASE_URL` (required) + `BOKCHOY_TRUSTED_ORIGINS` (optional). Carry from slice 8.2.0; needs to ship before smoke can boot the backend reliably in fresh-clone environments.
+- **Open / known debt (UNCHANGED):**
+  - All slice-8.1-era debt items still open.
+  - `[[gaps]]` Gap 3 (path discrepancy `apps/auth-config/` → `packages/auth-config/`) queued for /refactoring.
+- **Next on resume — recommended sequence:**
+  1. **User ratifies owner-role gap resolution.** (a) recommended; ~6 LOC auth-config extension. (b)/(c) require smoke contract amendment.
+  2. **Ship smoke** `/tmp/smoke-8-2.0-admin-gate.sh` — 3 positive + 6 negative end-to-end against running backend + seeded Better Auth state.
+  3. **`.env.example` update** — append BOKCHOY_BASE_URL + BOKCHOY_TRUSTED_ORIGINS.
+  4. Working tree includes: BC4xx cascade + handler + AppContext widening + state.md checkpoint. Smoke is the remaining piece for slice 8.2.1 commit.
+
+- **Mode (prior):** implementation → slice 8.2.0 LANDED 2026-05-11 (`[[admin-auth-surface]]` primitive layer shipped; 5/6 cascade obligations satisfied; integration-tests obligation deferred to slice 8.2.1 first-consumer smoke per project convention; gap report at `.bocek/vault/architecture/gaps.md` flags two queued amendments + path cleanup)
+- **BC4xx code cascade LANDED 2026-05-11** per `[[wallet-mechanics]]` Part 3 A18 Amendment 2026-05-11 + `[[admin-auth-surface]]` *Decision* contract amendments:
+  - **`apps/backend/src/admin/admin-gate.ts`** — granular BC code emissions per the amended contract. 4 changes: (a) Step 2 malformed-UUID branch BC400→BC402; (b) Step 3a missing URL param + Step 3a malformed projectId UUID BC400→BC402; (c) Step 4 not-a-member + Step 4b org-gone-via-race BC403→BC404; (d) Step 5 hasPermission-false BC403→BC405. Header doc comment block rewritten to reflect granular allocation. Span attribute `auth.outcome` strings unchanged per contract directive (observability tokens, not wire codes).
+  - **`apps/backend/src/infra/error-middleware.ts`** — BC_TO_HTTP map extended with BC400→400, BC401→401, BC402→400, BC403→403, BC404→403, BC405→403 + matching doc comment. Documentary only; adminGate returns directly so the map isn't load-bearing for the gate flow.
+- **Verification:** turbo typecheck 6/6 green (backend cache miss recompiled with new code); biome lint exit 0 (2 pre-existing wallet smoke-wrappers warnings only).
+- **Self-attack:**
+  - **Boundary input** (malformed UUID emits BC402 instead of broad BC400) ✅ matches contract.
+  - **Error path** (cross-org breach emits BC403) ✅ unchanged from prior shipping.
+  - **Concurrency hazard** (member-exists + org-deleted race emits BC404) ✅ contract step 4 explicit on race coverage.
+  - **Observability** (auth.outcome span strings unchanged) ✅ per /design directive.
+  - **Anti-default review** — senior reviewer would catch: any consumer hardcoded to `error.code === 'BC403'` for not-member detection now needs migration to `BC404`. No such consumer exists; slice 8.2.0 was the only emitter and only just shipped. No migration debt.
+- **Cascade obligations status (from prior /design):**
+  - **#1 admin-gate.ts split** ✅ LANDED.
+  - **#2 error-middleware.ts BC_TO_HTTP extension** ✅ LANDED.
+- **Open work for slice 8.2.1 proper (substantive — NOT shipped this turn):**
+  - **First consumer pick owed.** Two candidates per state.md prior checkpoints:
+    - **(A) `bootstrapProjectReasonCodes`** — admin-only POST that seeds the 12-code default-set on project creation per `[[wallet-mechanics]]` A15 R3. No design-research dependency; admin role's `reasonCode:bootstrap` permission is already granted (slice 8.2.0). Lower risk; ready to implement.
+    - **(B) `walletDeidentifyPlayer`** — DSR/GDPR right-to-be-forgotten flow. **BLOCKED on Q3 DSR-shape research** (carry-forward from prior /design seat — sync-vs-async + hard-delete-vs-tombstone + cascade-depth + GDPR Art. 17 reconciliation with immutable ledger). Cannot implement without first running /research for Q3.
+  - **`/tmp/smoke-8-2.0-admin-gate.sh`** integration smoke ships alongside the first consumer per `[[admin-auth-surface]]` *Mitigations* row 4 amendment. 3 positive + 6 negative cases (one per BC4xx outcome).
+- **Open / known debt (UNCHANGED):**
+  - All slice-8.1-era debt items still open.
+  - `.env.example` owes BOKCHOY_BASE_URL + BOKCHOY_TRUSTED_ORIGINS additions.
+  - `[[gaps]]` Gap 3 (path discrepancy `apps/auth-config/` → `packages/auth-config/`) queued for /refactoring.
+- **Next on resume — recommended sequence:**
+  1. **User picks first consumer.** (A) `bootstrapProjectReasonCodes` is the only path that ships in this /implementation pass without first running /research. (B) `walletDeidentifyPlayer` is owed a /research pass for Q3 DSR shape before any implementation can begin.
+  2. **Ship first consumer + `/tmp/smoke-8-2.0-admin-gate.sh`** — handler + integration smoke + state.md checkpoint.
+  3. Working tree as of this session = committed (slice 8.1.x cluster + slice 8.2 design+research+8.2.0 implementation) + uncommitted (2026-05-11 follow-up /design pass amendments + this BC4xx code cascade) ready for next commit.
+
+- **Mode (prior):** design → handoff to /implementation 2026-05-11 (slice 8.2.0 follow-up /design pass LANDED — Gap 1 + Gap 2 from `architecture/gaps.md` RESOLVED + vaulted; Gap 3 remains queued for /refactoring; ~15-LOC code cascade obligation queued for slice 8.2.1 prep)
+- **/design pass 2026-05-11 (follow-up) LANDED.** Two gap resolutions vaulted:
+  - **(Gap 1, mechanical)** `[[admin-auth-surface]]` *Mitigations* row 4 amended in place — integration smoke now lives at `/tmp/smoke-8-2.0-admin-gate.sh` shipped alongside slice 8.2.1 first consumer. Test scope expanded from 3-positive + 4-negative to 3-positive + 6-negative (one per BC4xx outcome per Gap 2's granular allocation). Project convention preserved (shell smoke for HTTP-middleware end-to-end testing; `bun:test` reserved for pure-logic units).
+  - **(Gap 2, design fork)** Position derivation enumerated (α) broad-stroke / (β) granular per-outcome / (γ) hybrid-split-where-remediation-differs. **(β) ratified by user** with named flip condition (90-day post-launch telemetry showing BC403/BC404/BC405 always flow through the same SDK handler → drop unused codes).
+- **`[[wallet-mechanics]]` Part 3 A18 Amendment 2026-05-11 vaulted** — BC400-BC499 reserved for auth/authorization. Allocated:
+  - **BC400 AdminContextMissing** → HTTP 400 (no `organizationId` in body/query/session).
+  - **BC401 AdminUnauthenticated** → HTTP 401 (`auth.api.getSession()` null).
+  - **BC402 AdminInvalidInput** → HTTP 400 (malformed UUID, missing URL param).
+  - **BC403 AdminCrossOrgForbidden** → HTTP 403 (`project.organization_id` mismatch).
+  - **BC404 AdminNotAMember** → HTTP 403 (no `member` row in resolved org).
+  - **BC405 AdminInsufficientPermissions** → HTTP 403 (`hasPermission()` false).
+- **(β) defense vaulted** with three converging arguments: (1) internal consistency with 10 existing BC codes (each one-outcome); (2) customer-profile axis from `[[wallet-http-contract]]` G5 amendment (developer-facing SDK during dev — snapshot-at-error matters); (3) asymmetric reversibility (drop unused codes cheap; consumer-migration if codes split later costly).
+- **`[[admin-auth-surface]]` *Decision* contract amended in place** — steps 1-5 now reference granular codes. *Failure mode* reference updated BC403 → BC405. *Open threads* row 3 marked RESOLVED with cascade obligation cross-referenced.
+- **`architecture/gaps.md` updated** — Gap 1 + Gap 2 marked RESOLVED 2026-05-11 with resolution summaries prepended; original gap reports preserved for historical context. Gap 3 (path discrepancy `apps/auth-config/` → `packages/auth-config/`) remains open — queued for /refactoring per gap report's own resolution recommendation.
+- **Cascade obligations queued for /implementation (slice 8.2.1 prep, ~15 LOC across 2 files):**
+  1. **`apps/backend/src/admin/admin-gate.ts`** — replace broad-stroke emissions per the granular allocation. Step 2 missing-context → BC400; Step 2 invalid-UUID + Step 3a malformed-UUID + Step 3a missing-param → BC402; Step 3b project.organization_id mismatch → BC403; Step 4 not-a-member → BC404; Step 5 `hasPermission` false → BC405. BC401 unchanged. Span attribute `auth.outcome` strings remain (`fail.401`, `fail.400`, `fail.403_cross_org`, `fail.403_not_member`, `fail.403_perm`) — observability tokens, not wire codes; coupling them to BC numbers would conflate two namespaces.
+  2. **`apps/backend/src/infra/error-middleware.ts`** — extend `BC_TO_HTTP` map with BC400→400, BC401→401, BC402→400, BC403→403, BC404→403, BC405→403. Documentary only; `adminGate` returns directly (matches `apiKeyMiddleware` / `idempotencyMiddleware` pattern) so the map isn't load-bearing for the gate flow.
+- **No new design decisions in this pass itself.** The granular allocation (β) was selected against (α)/(γ) per *Position derivation*; (α) and (γ) vaulted as rejected alternatives in `[[wallet-mechanics]]` A18 Amendment text (with winning conditions).
+- **Cascades closed by 2026-05-11 follow-up /design pass:**
+  - **`[[gaps]]` Gap 1** — RESOLVED.
+  - **`[[gaps]]` Gap 2** — RESOLVED.
+  - **`[[admin-auth-surface]]` *Open threads* row 3** (BC4xx allocation) — RESOLVED.
+- **Cascades active (UNCHANGED):**
+  - **`[[gaps]]` Gap 3** — path discrepancy `apps/auth-config/` → `packages/auth-config/` in 3 vault entries; mechanical /refactoring queued.
+  - **`[[idempotency-strategy]]` §Concurrency Generalization note watch** — second cross-cutting middleware writing to UNIQUE-constrained table triggers promotion to `[[upsert-race-loser-pattern]]` standalone entry.
+- **Open / known debt (UNCHANGED by follow-up /design pass):**
+  - All slice-8.1-era debt items still open.
+  - Q3 DSR-shape research entry owed if /design picks `walletDeidentifyPlayer` as slice 8.2.1 consumer (carry-forward from prior /design seat).
+  - `.env.example` — owes `BOKCHOY_BASE_URL` + `BOKCHOY_TRUSTED_ORIGINS` additions.
+- **Next on resume — recommended sequence:**
+  1. **Switch to `/implementation`** for slice 8.2.1. First work unit: amend `admin-gate.ts` + `error-middleware.ts` per cascade obligations 1+2 above (~15 LOC, mechanical). Second work unit: pick first admin handler consumer (`bootstrapProjectReasonCodes` is lower-risk; `walletDeidentifyPlayer` requires Q3 DSR research first).
+  2. **`/tmp/smoke-8-2.0-admin-gate.sh`** ships alongside the first consumer per `[[admin-auth-surface]]` *Mitigations* row 4 amendment.
+  3. Working tree as of this session = committed slice 8.1.x cluster + committed slice 8.2 design+research+8.2.0 implementation + this follow-up /design pass (3 vault amendments + state.md update) ready for next commit.
+
+- **Mode (prior):** implementation → slice 8.2.0 LANDED 2026-05-11 (`[[admin-auth-surface]]` primitive layer shipped; 5/6 cascade obligations satisfied; integration-tests obligation deferred to slice 8.2.1 first-consumer smoke per project convention; gap report at `.bocek/vault/architecture/gaps.md` flags two queued amendments + path cleanup)
 - **Slice 8.2.0 LANDED 2026-05-11 per `[[admin-auth-surface]]` contract.** Eight work units shipped:
   - **`packages/auth-config/src/index.ts`** extended with `createAccessControl({ reasonCode: ['bootstrap'], player: ['deidentify'] } as const)` + `adminRole` granting both + `roles` export keyed by `'admin'`. Plugin wiring updated to `organization({ ac, roles })`. Per [[admin-auth-surface]] D3 + D5; `roles` export load-bearing for cascade obligation #3 (CI lint).
   - **`apps/backend/src/infra/auth.ts`** (NEW) — Better Auth singleton via `createAuth({ db, baseURL, trustedOrigins })`. Closes `apps/backend/src/index.ts:25` "Better Auth wiring explicitly out" comment. `auth.api.getSession` / `auth.api.hasPermission` work without mounting Better Auth's HTTP routes (route-mount is cockpit-slice scope).

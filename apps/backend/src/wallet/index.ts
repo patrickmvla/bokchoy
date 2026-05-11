@@ -1,27 +1,42 @@
 // Wallet feature module per [[backend-service-shape]] §2 + [[wallet-mechanics]]
-// + [[wallet-http-contract]] slice 8.1c.
+// + [[wallet-http-contract]] slice 8.1c + slice 8.2.1.
 //
 // Routes (slash-suffix-verb on resource id per [[url-pattern-research]] F1):
-//   POST /v1/wallets/{walletId}/credit   — increment wallet balance
-//   POST /v1/wallets/{walletId}/debit    — decrement wallet balance (BC010 if insufficient)
+//   POST /v1/wallets/{walletId}/credit                       — slice 8.1c: SDK-auth, idempotency-key
+//   POST /v1/wallets/{walletId}/debit                        — slice 8.1c: SDK-auth, idempotency-key
+//   POST /v1/projects/{projectId}/bootstrap-reason-codes     — slice 8.2.1: cockpit-admin, naturally-idempotent
 //
-// Chain per [[wallet-http-contract]] handler shape:
+// SDK auth chain (credit/debit) per [[wallet-http-contract]] handler shape:
 //   apiKeyMiddleware  → Bearer auth, sets c.var.projectId + apiKeyId
 //   idempotencyMiddleware → optional Idempotency-Key 4-state machine
 //   sValidator('param') → walletId UUID
 //   sValidator('json')  → camelCase body schema
 //   handler           → withTenant → tracer.startActiveSpan → walletCredit/Debit
 //
+// Admin auth chain (bootstrap-reason-codes) per [[admin-auth-surface]] contract:
+//   adminGate({ resource: 'reasonCode', actions: ['bootstrap'], projectIdParam: 'projectId' })
+//     → validates session, body/query/session-resolves org, BokChoy-side
+//       tenancy check (project.organization_id === resolvedOrgId), member
+//       lookup, hasPermission. Sets c.var['admin.member'] + c.var['admin.org'].
+//   handler         → withTenant → tracer.startActiveSpan → bootstrapProjectReasonCodes
+//
+// No Idempotency-Key middleware on bootstrap — the underlying SQL function uses
+// INSERT … ON CONFLICT DO NOTHING (per packages/wallet/src/bootstrap-project-reason-codes.ts
+// line 6), so re-runs naturally return inserted=0 instead of erroring. The
+// HTTP-layer Idempotency-Key state machine is for non-idempotent operations
+// (credit/debit) where the contract requires replay-safety.
+//
 // Errors propagate to the app-level onError (apps/backend/src/infra/error-middleware.ts):
 // WalletError → Stripe-wrapped `{error:{code,message,...details}}` with BCxxx→HTTP map.
 
 import { withTenant } from '@bokchoy/db';
-import { walletCredit, walletDebit } from '@bokchoy/wallet';
+import { bootstrapProjectReasonCodes, walletCredit, walletDebit } from '@bokchoy/wallet';
 import { type Hook, sValidator } from '@hono/standard-validator';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
 import type { Context, Env, Hono } from 'hono';
 import { z } from 'zod';
+import { type AdminContext, adminGate } from '../admin';
 import { type ApiKeyContext, apiKeyMiddleware } from '../auth';
 import { type IdempotencyContext, idempotencyMiddleware } from '../idempotency';
 import { db } from '../infra';
@@ -134,12 +149,58 @@ function makeMutationHandler(
   };
 }
 
+// Bootstrap-reason-codes handler — slice 8.2.1 first admin-auth consumer per
+// [[admin-auth-surface]]. adminGate has already validated session + org context
+// + BokChoy-side tenancy check (project.organization_id === resolvedOrgId) +
+// member + permission by the time this runs. c.req.param('projectId') is
+// guaranteed UUID-shape. c.var['admin.org'].id === project.organization_id by
+// invariant. withTenant scopes the RLS GUC to the project for the wrapper call.
+type BootstrapAppContext = AdminContext;
+
+async function bootstrapReasonCodesHandler(
+  c: Context<BootstrapAppContext, '/v1/projects/:projectId/bootstrap-reason-codes'>,
+) {
+  const projectId = c.req.param('projectId') as string;
+
+  const inserted = await tracer.startActiveSpan(
+    'wallet.bootstrap_reason_codes',
+    {
+      attributes: {
+        'db.system': 'postgresql',
+        'db.operation': 'bootstrap_project_reason_codes',
+        'bokchoy.project_id': projectId,
+        'bokchoy.organization_id': c.var['admin.org'].id,
+        'bokchoy.user_id': c.var['admin.member'].userId,
+      },
+    },
+    async (span) => {
+      try {
+        const count = await withTenant(db, projectId, async (tx) =>
+          bootstrapProjectReasonCodes(tx, { projectId }),
+        );
+        span.setAttribute('bokchoy.inserted_count', count);
+        return count;
+      } catch (err) {
+        if (err instanceof Error) {
+          span.recordException(err);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        }
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  );
+
+  return c.json({ inserted }, 200);
+}
+
 // Mounted onto the parent Hono app rather than chained-export to avoid the
 // `Issue` type leak from @standard-schema/spec into the inferred export type
 // (TS 2883 — Hono's chained `.post(...).post(...)` builder builds a generic
 // type that references Issue, which isn't transitively re-exportable from
 // outside @hono/standard-validator's package boundary).
-export function mountWalletRoutes(app: Hono<WalletAppContext>): void {
+export function mountWalletRoutes(app: Hono<WalletAppContext & BootstrapAppContext>): void {
   app.post(
     '/v1/wallets/:walletId/credit',
     apiKeyMiddleware,
@@ -155,5 +216,14 @@ export function mountWalletRoutes(app: Hono<WalletAppContext>): void {
     sValidator('param', walletIdParam, validationFailureHook),
     sValidator('json', creditDebitBody, validationFailureHook),
     makeMutationHandler('wallet.debit', walletDebit),
+  );
+  app.post(
+    '/v1/projects/:projectId/bootstrap-reason-codes',
+    adminGate({
+      resource: 'reasonCode',
+      actions: ['bootstrap'],
+      projectIdParam: 'projectId',
+    }),
+    bootstrapReasonCodesHandler,
   );
 }

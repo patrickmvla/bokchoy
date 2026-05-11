@@ -15,8 +15,9 @@
 import type { Db } from '@bokchoy/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { anonymous, organization } from 'better-auth/plugins';
+import { anonymous, bearer, organization } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
+import { defaultStatements as bauthStatements } from 'better-auth/plugins/organization/access';
 
 // ---- Static access control per [[admin-auth-surface]] D3 + D5 ----
 //
@@ -24,34 +25,60 @@ import { createAccessControl } from 'better-auth/plugins/access';
 // + organizationRole table deferred to RBAC-plugin slice post-MVP per
 // [[backend-stack]] §7 line 117.
 //
-// Statement schema covers MVP admin endpoints named in [[wallet-http-contract]]
-// G6 + line 207:
-//   - reasonCode:bootstrap → bootstrapProjectReasonCodes (slice 8.2)
+// Statement schema = Better Auth's default org-plugin statements (organization
+// / member / invitation / team / ac) MERGED with BokChoy custom resources:
+//   - reasonCode:bootstrap → bootstrapProjectReasonCodes (slice 8.2.1)
 //   - player:deidentify    → walletDeidentifyPlayer (slice 8.2 / DSR flow)
 //
-// Each new admin endpoint extends this object + the adminRole permission map.
-// Per [[admin-auth-surface]] D5, the extension shape is two `as const` literal
-// edits per endpoint — no schema migration, no role rename.
+// Hand-roll all three roles (admin / owner / member) ground-up rather than
+// spreading Better Auth's defaultRoles + overriding admin/owner — the default
+// role objects are keyed against `defaultAc` (only Better Auth statements);
+// our extended `ac` has BokChoy statements too, and hand-rolling keeps each
+// role's permission set fully under BokChoy's control + visible in one place.
+//
+// Owner-inherits-admin per [[admin-auth-surface]] *Mitigations* row 4 (a)
+// resolution 2026-05-11: org owner = customer-developer's primary account =
+// holds all admin permissions PLUS Better Auth's org-delete privilege.
 
 export const statements = {
+  ...bauthStatements,
   reasonCode: ['bootstrap'],
   player: ['deidentify'],
 } as const;
 
 export const ac = createAccessControl(statements);
 
-// MVP role set per [[admin-auth-surface]] D5: single "admin" role grants every
-// MVP admin permission. `owner` and `member` inherit Better Auth defaults
-// (owner = full org control; member = no BokChoy-admin permissions, only the
-// default ac:read per Better Auth access/statement.ts:34).
-//
-// Revisit per [[admin-auth-surface]] *Revisit when* row 2: multi-role split
-// triggers if ≥3 admin endpoints emerge with disjoint scopes AND customer
-// signal arrives that the same human shouldn't hold all three. No current
-// trigger.
+// admin = Better Auth admin defaults + BokChoy custom permissions. Per Better
+// Auth `access/statement.ts:13-19`, default admin gets organization update
+// (NOT delete), invitation create+cancel, member CRUD, team CRUD, ac CRUD.
 const adminRole = ac.newRole({
+  organization: ['update'],
+  invitation: ['create', 'cancel'],
+  member: ['create', 'update', 'delete'],
+  team: ['create', 'update', 'delete'],
+  ac: ['create', 'read', 'update', 'delete'],
   reasonCode: ['bootstrap'],
   player: ['deidentify'],
+});
+
+// owner = admin permissions + organization delete. Per Better Auth
+// `access/statement.ts:21-27` owner default; extended with BokChoy customs per
+// [[admin-auth-surface]] *Mitigations* row 4 (a).
+const ownerRole = ac.newRole({
+  organization: ['update', 'delete'],
+  invitation: ['create', 'cancel'],
+  member: ['create', 'update', 'delete'],
+  team: ['create', 'update', 'delete'],
+  ac: ['create', 'read', 'update', 'delete'],
+  reasonCode: ['bootstrap'],
+  player: ['deidentify'],
+});
+
+// member = Better Auth member default. Read-only on AC config (so members can
+// view roles their org has) per `access/statement.ts:29-35`. No BokChoy
+// custom permissions; bootstrap and deidentify fail BC405 for plain members.
+const memberRole = ac.newRole({
+  ac: ['read'],
 });
 
 /**
@@ -61,6 +88,8 @@ const adminRole = ac.newRole({
  */
 export const roles = {
   admin: adminRole,
+  owner: ownerRole,
+  member: memberRole,
 } as const;
 
 export type RoleName = keyof typeof roles;
@@ -100,6 +129,12 @@ export function createAuth(opts: CreateAuthOptions) {
       anonymous(),
       // Static AC wiring per [[admin-auth-surface]] D3 + D5.
       organization({ ac, roles }),
+      // Bearer transport for scripted/non-browser admin tools (CLI, smoke tests,
+      // server-to-server). Cookie transport remains the default for cockpit
+      // browser flow. Per [[admin-auth-surface]] D1 — the gate doesn't pin a
+      // transport, just "validate session"; bearer extends the accepted
+      // session sources without changing gate logic.
+      bearer(),
     ],
   });
 }

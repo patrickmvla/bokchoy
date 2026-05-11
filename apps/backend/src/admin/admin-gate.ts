@@ -6,22 +6,27 @@
 // Variables generic carries the discriminated context shape per
 // idioms/typescript.md *Make impossible states unrepresentable*.
 //
-// CONTRACT (verbatim from [[admin-auth-surface]]):
-//   1. auth.api.getSession({ headers: c.req.raw.headers }) → null → 401 BC401
-//   2. resolve org: body.organizationId ?? query.organizationId ??
-//      session.session.activeOrganizationId → null → 400 BC400
-//   3. if projectIdParam set: JOIN projects, verify
-//      project.organization_id === resolvedOrgId → mismatch → 403 BC403
-//   4. findMemberByOrgId({ userId, organizationId }) → null → 403 BC403
-//   5. auth.api.hasPermission({ headers, body: { permissions: { [r]: a } } })
-//      → false → 403 BC403
+// CONTRACT (verbatim from [[admin-auth-surface]] amended 2026-05-11):
+//   1. auth.api.getSession → null → 401 BC401 AdminUnauthenticated
+//   2. resolve org body ?? query ?? session.activeOrganizationId
+//      null                 → 400 BC400 AdminContextMissing
+//      present non-UUID     → 400 BC402 AdminInvalidInput
+//   3. if projectIdParam set:
+//      URL param missing    → 400 BC402 AdminInvalidInput
+//      URL param non-UUID   → 400 BC402 AdminInvalidInput
+//      project not found OR project.organization_id mismatch
+//                           → 403 BC403 AdminCrossOrgForbidden
+//   4. findMemberByOrgId → null (or org row gone via race)
+//                           → 403 BC404 AdminNotAMember
+//   5. auth.api.hasPermission → false
+//                           → 403 BC405 AdminInsufficientPermissions
 //   6. c.set('admin.member', member) + c.set('admin.org', org) + next()
 //
 // Error wire-shape matches existing middleware convention (apiKeyMiddleware +
 // idempotencyMiddleware) — direct c.json return with { error: { code, message } }
-// instead of throw → errorMiddleware. BC400/BC401/BC403 codes per the
-// [[admin-auth-surface]] vault entry; formal namespace amendment to
-// [[wallet-mechanics]] A18 is queued for next /design pass per state.md.
+// instead of throw → errorMiddleware. BC400-BC405 allocated in
+// [[wallet-mechanics]] Part 3 A18 Amendment 2026-05-11 (BC400-BC499 reserved
+// for auth/authorization, one code per semantic outcome).
 //
 // OTel span emission per [[admin-auth-surface]] *Engineering substance applied*
 // → *Observability*: span name `admin.gate`, attributes capture every gate
@@ -153,7 +158,7 @@ export function adminGate<R extends StatementResource>(opts: AdminGateOptions<R>
           }
           if (!UUID_REGEX.test(resolvedOrgId)) {
             span.setAttribute('auth.outcome', 'fail.400');
-            return c.json(err('BC400', 'organizationId is not a valid UUID'), 400);
+            return c.json(err('BC402', 'organizationId is not a valid UUID'), 400);
           }
           span.setAttribute('auth.organization_id', resolvedOrgId);
 
@@ -162,11 +167,11 @@ export function adminGate<R extends StatementResource>(opts: AdminGateOptions<R>
             const projectIdRaw = c.req.param(opts.projectIdParam);
             if (!projectIdRaw) {
               span.setAttribute('auth.outcome', 'fail.400');
-              return c.json(err('BC400', `URL param :${opts.projectIdParam} is missing`), 400);
+              return c.json(err('BC402', `URL param :${opts.projectIdParam} is missing`), 400);
             }
             if (!UUID_REGEX.test(projectIdRaw)) {
               span.setAttribute('auth.outcome', 'fail.400');
-              return c.json(err('BC400', `${opts.projectIdParam} is not a valid UUID`), 400);
+              return c.json(err('BC402', `${opts.projectIdParam} is not a valid UUID`), 400);
             }
             const [project] = await dbSingleton
               .select({ organizationId: projectsTable.organizationId })
@@ -196,7 +201,7 @@ export function adminGate<R extends StatementResource>(opts: AdminGateOptions<R>
             .limit(1);
           if (!memberRow) {
             span.setAttribute('auth.outcome', 'fail.403_not_member');
-            return c.json(err('BC403', 'not_a_member'), 403);
+            return c.json(err('BC404', 'not_a_member'), 403);
           }
           span.setAttribute('auth.role', memberRow.role);
 
@@ -211,7 +216,7 @@ export function adminGate<R extends StatementResource>(opts: AdminGateOptions<R>
             // member.organizationId is ON DELETE CASCADE per schema; concurrent
             // delete + this read is the only window. Treat as not-a-member.
             span.setAttribute('auth.outcome', 'fail.403_not_member');
-            return c.json(err('BC403', 'not_a_member'), 403);
+            return c.json(err('BC404', 'not_a_member'), 403);
           }
 
           // Step 5: Permission check. Better Auth's hasPermission input is
@@ -238,7 +243,7 @@ export function adminGate<R extends StatementResource>(opts: AdminGateOptions<R>
               : Boolean((result as { success?: boolean } | null | undefined)?.success);
           if (!passed) {
             span.setAttribute('auth.outcome', 'fail.403_perm');
-            return c.json(err('BC403', 'insufficient_permissions'), 403);
+            return c.json(err('BC405', 'insufficient_permissions'), 403);
           }
 
           // Step 6: Set context + proceed.

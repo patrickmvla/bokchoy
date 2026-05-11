@@ -13,17 +13,29 @@ import type { ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
-// BCxxx → HTTP status verbatim from [[wallet-http-contract]] error-table:
-//   BC001 → 409  IdempotencyKeyInUse        (middleware-raised)
-//   BC002 → 422  IdempotencyKeyMismatch     (middleware-raised)
+// BCxxx → HTTP status verbatim from [[wallet-http-contract]] error-table +
+// [[wallet-mechanics]] Part 3 A18 Amendment 2026-05-11 (BC400-BC499 auth):
+//   BC001 → 409  IdempotencyKeyInUse           (middleware-raised)
+//   BC002 → 422  IdempotencyKeyMismatch        (middleware-raised)
 //   BC010 → 422  InsufficientFunds
-//   BC020 → 500  TenantMismatch             (defense-in-depth — should never fire from well-formed callers)
+//   BC020 → 500  TenantMismatch                (defense-in-depth — should never fire from well-formed callers)
 //   BC021 → 422  WalletNotFound
 //   BC022 → 422  CurrencyMismatch
-//   BC030 → 422  PolicyViolation            (reserved)
-//   BC040 → 500  ConfigurationError         (anon_secret missing)
-//   BC050 → 422  ReasonCodeNotRegistered    (translated from PG 23503)
-//   BC060 → 422  CurrencyNotFound           (reserved — translated from PG 23503)
+//   BC030 → 422  PolicyViolation               (reserved)
+//   BC040 → 500  ConfigurationError            (anon_secret missing)
+//   BC050 → 422  ReasonCodeNotRegistered       (translated from PG 23503)
+//   BC060 → 422  CurrencyNotFound              (reserved — translated from PG 23503)
+//   BC400 → 400  AdminContextMissing           (adminGate-raised; no organizationId in body/query/session)
+//   BC401 → 401  AdminUnauthenticated          (adminGate-raised; getSession returned null)
+//   BC402 → 400  AdminInvalidInput             (adminGate-raised; malformed UUID or missing URL param)
+//   BC403 → 403  AdminCrossOrgForbidden        (adminGate-raised; project.organization_id mismatch)
+//   BC404 → 403  AdminNotAMember               (adminGate-raised; no member row in resolved org)
+//   BC405 → 403  AdminInsufficientPermissions  (adminGate-raised; hasPermission false)
+//
+// BC400-BC405 are documentary here — adminGate returns c.json directly (matches
+// apiKeyMiddleware + idempotencyMiddleware convention) so this map is NOT
+// load-bearing for the gate flow. Single-source documentation of every BCxxx →
+// HTTP-status mapping for the system.
 const BC_TO_HTTP: Record<string, ContentfulStatusCode> = {
   BC001: 409,
   BC002: 422,
@@ -35,6 +47,12 @@ const BC_TO_HTTP: Record<string, ContentfulStatusCode> = {
   BC040: 500,
   BC050: 422,
   BC060: 422,
+  BC400: 400,
+  BC401: 401,
+  BC402: 400,
+  BC403: 403,
+  BC404: 403,
+  BC405: 403,
 };
 
 export const errorMiddleware: ErrorHandler = (err, c) => {

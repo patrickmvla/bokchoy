@@ -37,13 +37,18 @@ import { httpInstrumentationMiddleware } from '@hono/otel';
 import { trace } from '@opentelemetry/api';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import type { AdminContext } from './admin';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
 import { db, errorMiddleware } from './infra';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
 import { mountWalletRoutes } from './wallet';
 
-type AppContext = ApiKeyContext & IdempotencyContext;
+// AppContext is the union of every middleware's Variables shape. Each route
+// only populates a subset via its middleware chain; the union here is the
+// superset so any route's c.var.* access typechecks. AdminContext joins the
+// existing api-key + idempotency context per [[admin-auth-surface]] D2.
+type AppContext = ApiKeyContext & IdempotencyContext & AdminContext;
 
 const app = new Hono<AppContext>();
 
