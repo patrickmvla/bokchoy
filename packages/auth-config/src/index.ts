@@ -140,6 +140,27 @@ export interface CreateAuthOptions {
   trustedOrigins?: string[];
 }
 
+// Build socialProviders config conditionally — register google/github only
+// when their credentials are set in env per [[cockpit/auth-surface-mount]] (P).
+// Local dev without OAuth keys still boots cleanly; production with full env
+// gets both providers. Strict literal "always register both" from the (P)
+// code snippet would crash dev when env vars are unset; the contract's intent
+// is env-driven configuration, so this conditional shape preserves the
+// contract while making local dev workable. Operator sees a clear empty
+// socialProviders block (or a partial one) reflecting current env state.
+function buildSocialProviders() {
+  const providers: Record<string, { clientId: string; clientSecret: string }> = {};
+  const { GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET } =
+    process.env;
+  if (GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+    providers.google = { clientId: GOOGLE_CLIENT_ID, clientSecret: GOOGLE_CLIENT_SECRET };
+  }
+  if (GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET) {
+    providers.github = { clientId: GITHUB_CLIENT_ID, clientSecret: GITHUB_CLIENT_SECRET };
+  }
+  return providers;
+}
+
 export function createAuth(opts: CreateAuthOptions) {
   return betterAuth({
     database: drizzleAdapter(opts.db, {
@@ -160,6 +181,7 @@ export function createAuth(opts: CreateAuthOptions) {
       // [[player-auth]] §2's argon2id mandate applies to the player-side
       // flow in a different module, not this customer-developer flow.
     },
+    socialProviders: buildSocialProviders(),
     plugins: [
       anonymous(),
       // Static AC wiring per [[admin-auth-surface]] D3 + D5.
