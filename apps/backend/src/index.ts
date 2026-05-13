@@ -41,6 +41,8 @@ import type { AdminContext } from './admin';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
 import { auth, db, errorMiddleware } from './infra';
+import { mountOrgsRoutes } from './orgs';
+import { mountProjectsRoutes } from './projects';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
 import { mountWalletRoutes } from './wallet';
 
@@ -118,6 +120,12 @@ app.post('/v1/health-authed', apiKeyMiddleware, idempotencyMiddleware, async (c)
 // next.config.ts preserve same-origin perception to the browser per
 // [[cockpit-stack-integration-research]] F1.
 app.on(['POST', 'GET'], '/api/auth/*', (c) => auth.handler(c.req.raw));
+
+// Slice 8.3 — orgs cockpit-admin route per [[cockpit/admin-list-endpoints-contract]].
+mountOrgsRoutes(app);
+
+// Slice 8.4 — projects + api-keys cockpit-admin routes per [[cockpit/admin-list-endpoints-contract]].
+mountProjectsRoutes(app);
 
 // Slice 8.1c — wallet credit/debit routes per [[wallet-http-contract]].
 mountWalletRoutes(app);
