@@ -218,8 +218,8 @@ Likelihood: low. shadcn pattern is to extend via variants on the primitive itsel
 
 1. **`apps/cockpit/package.json`** — Next.js 16.2.6 + React 19.2 + Better Auth (catalog) + @bokchoy/auth-config (workspace) + TanStack Query + Tailwind v4 + Radix UI + RHF + Zod + shadcn deps.
 2. **`apps/cockpit/next.config.ts`** — env-driven async rewrites per `[[auth-surface-mount]]` (V3).
-3. **`apps/cockpit/tailwind.config.ts`** — Tailwind v4 config matching shadcn defaults.
-4. **shadcn CLI bootstrap** — initialize shadcn into `components/ui/` per shadcn's `components.json` convention.
+3. ~~**`apps/cockpit/tailwind.config.ts`** — Tailwind v4 config matching shadcn defaults.~~ **OBSOLETE per Amendment 2026-05-12 (see below).** Tailwind v4 has NO JS config file — `components.json.tailwind.config: ""` is the canonical signal. All theme tokens live in CSS via `@theme inline` directives in `app/globals.css`. See `[[cockpit/shadcn-setup-research]]` F4 (schema) + C2 (conflict resolution) + `[[cockpit/shadcn-setup]]` (the decision).
+4. **shadcn CLI bootstrap** — `cd apps/cockpit && bunx shadcn@latest init --base radix --preset radix-nova --yes` per `[[cockpit/shadcn-setup]]`. Initializes `apps/cockpit/components/ui/` with `aliases.ui: "@/components/ui"` (cockpit-local per (M-LOCAL); NOT `packages/ui/` workspace extraction).
 5. **`apps/cockpit/app/layout.tsx`** — root layout with QueryClientProvider + Better Auth client provider mount.
 6. **`apps/cockpit/components/layouts/{app-shell,sidebar,header,marketing-shell,auth-shell}.tsx`** — cross-feature shells.
 7. **`apps/cockpit/modules/{auth,projects,organizations,marketing}/`** — vertical slices with components / api / hooks / lib / types per the structure above.
@@ -231,5 +231,7 @@ Likelihood: low. shadcn pattern is to extend via variants on the primitive itsel
 
 - **Cockpit testing infrastructure** — slice 8.3 ships without in-tree component tests per slice 8.2.1 precedent (shell smoke scripts only). Vitest / Playwright wiring deferred until first cockpit slice surfaces a real test gap. `[[frontend-stack]]` vaulted both as MVP-target stacks; implementation timing TBD.
 - **`*-view.tsx` abstraction reopening trigger** — first cockpit unit test OR first route reuse will trigger introduction. Watch for it during slice 8.4-8.6.
-- **shadcn `components.json` config path** — `components/ui/` is the shadcn CLI default; confirm at scaffold time.
+- ~~**shadcn `components.json` config path** — `components/ui/` is the shadcn CLI default; confirm at scaffold time.~~ **RESOLVED 2026-05-12 per `[[cockpit/shadcn-setup]]`** — `aliases.ui: "@/components/ui"`, `aliases.components: "@/components"`, `aliases.utils: "@/lib/utils"`, `aliases.lib: "@/lib"`, `aliases.hooks: "@/hooks"`. `apps/cockpit/hooks/.gitkeep` required pre-init (the `hooks` alias path must exist).
+
+**Amendment 2026-05-12 (cascade #3 obsolete + shadcn picks landed):** `[[cockpit/shadcn-setup]]` resolved the shadcn bootstrap decisions (`--base radix` + `--preset radix-nova` + `next-themes` class-based dark mode). Tailwind v4 eliminates the JS config file — cascade #3 (`apps/cockpit/tailwind.config.ts`) is OBSOLETE. All theme tokens live in `app/globals.css` via `@theme inline` directives; `components.json.tailwind.config: ""` is canonical. The decision entry contains the full init runbook + post-init verification checklist. See `[[cockpit/shadcn-setup-research]]` F4 / F6 / C2 for source-anchored evidence.
 - **Cross-module shared types vs `@bokchoy/shared-types`** — workspace-level shared types package (already exists per workspace structure). Cockpit modules consume via `import type { Project } from '@bokchoy/shared-types'`. Slice 8.4 cascade obligation: backend handlers export types to `@bokchoy/shared-types` for cockpit consumption.
