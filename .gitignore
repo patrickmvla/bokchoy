@@ -15,6 +15,11 @@ bun.lockb
 # TypeScript
 *.tsbuildinfo
 
+# Next.js auto-generated (per [[cockpit/nextjs-scaffold-research]] F3 + Next.js docs:
+# "We recommend adding next-env.d.ts to your .gitignore file.")
+# Wildcard form: covers apps/cockpit and any future Next.js app under apps/.
+**/next-env.d.ts
+
 # Env
 .env
 .env.local

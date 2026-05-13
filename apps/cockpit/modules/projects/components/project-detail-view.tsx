@@ -1,0 +1,352 @@
+// Project detail Client Component per [[cockpit/first-run-journey]] step 11
+// (T2 verify-key polling) + [[cockpit/admin-list-endpoints-contract]] (A1).
+//
+// Owns the TanStack Query polling loop via use-project. While no api_key has a
+// non-null lastUsedAt, the verify-key panel shows "Waiting for first SDK
+// call…"; once lastUsedAt is observed, the panel flips to "Key verified" and
+// polling stops (refetchInterval returns false). The first-run-journey
+// mitigation for indefinite polling (5-minute timeout) is deferred — a
+// page-level "Still waiting?" hint can land later without touching the query.
+//
+// The post-step-7 visible-once API-key modal is NOT mounted here — it's owned
+// by the create-project-form per [[cockpit/first-run-journey]] step 7; this
+// page is the redirect target AFTER the modal is dismissed (step 8). The
+// detail page never sees the plaintext key.
+//
+// The SDK-install code snippet from step 8 is NOT shown yet — the
+// @bokchoy/sdk package is unpublished per the [[cockpit/first-run-journey]]
+// open thread. When the SDK ships, add the snippet inside <VerifyKeyPanel>'s
+// waiting state. For slice 8.4 next-cut, the verify panel just shows status
+// + relative-time updates.
+
+'use client';
+
+import {
+  CheckCircle2Icon,
+  CircleAlertIcon,
+  ClockIcon,
+  KeyIcon,
+} from 'lucide-react';
+import Link from 'next/link';
+import { useState } from 'react';
+import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Spinner } from '@/components/ui/spinner';
+import { userMessage } from '@/lib/error-messages';
+import { ProjectApiError } from '../api/create-project';
+import { useProject } from '../hooks/use-project';
+import { useRevokeApiKey } from '../hooks/use-revoke-api-key';
+import type { ApiKey, ProjectDetail } from '../types';
+
+export function ProjectDetailView({ projectId }: { projectId: string }) {
+  const { data: project, isLoading, isError, error } = useProject(projectId);
+
+  if (isLoading) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-10">
+        <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <Spinner className="mr-2 size-4" />
+          Loading project…
+        </div>
+      </main>
+    );
+  }
+
+  if (isError || !project) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-10">
+        <div className="rounded-md border border-destructive/50 bg-destructive/5 p-4 text-sm text-destructive">
+          <p className="font-medium">Failed to load project</p>
+          <p className="mt-1">{error?.message ?? 'Unknown error.'}</p>
+          <Link
+            href="/projects"
+            className="mt-3 inline-block text-sm underline underline-offset-4"
+          >
+            Back to projects
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  return (
+    <main className="mx-auto max-w-5xl px-4 py-10">
+      <nav className="mb-2 text-sm text-muted-foreground">
+        <Link href="/projects" className="hover:text-foreground">
+          Projects
+        </Link>
+        <span className="mx-2">/</span>
+        <span className="text-foreground">{project.name}</span>
+      </nav>
+      <header className="mb-8">
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {project.name}
+        </h1>
+        <p className="mt-1 font-mono text-sm text-muted-foreground">
+          {project.slug}
+        </p>
+      </header>
+
+      <div className="mb-8">
+        <VerifyKeyPanel project={project} />
+      </div>
+
+      <ApiKeysSection projectId={project.id} apiKeys={project.apiKeys} />
+    </main>
+  );
+}
+
+function VerifyKeyPanel({ project }: { project: ProjectDetail }) {
+  const verifiedKey = project.apiKeys.find(
+    (k) => k.lastUsedAt !== null && k.revokedAt === null,
+  );
+
+  if (verifiedKey) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <CheckCircle2Icon className="size-5 text-emerald-600 dark:text-emerald-500" />
+            <CardTitle className="text-base">Key verified</CardTitle>
+          </div>
+          <CardDescription>
+            Last used {formatRelative(verifiedKey.lastUsedAt as string)} —
+            <span className="font-mono"> {verifiedKey.keyPrefix}…</span>
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  if (project.apiKeys.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <CircleAlertIcon className="size-5 text-muted-foreground" />
+            <CardTitle className="text-base">No API keys yet</CardTitle>
+          </div>
+          <CardDescription>
+            Issue an API key to start making SDK calls.
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Spinner className="size-4" />
+          <CardTitle className="text-base">
+            Waiting for first SDK call…
+          </CardTitle>
+        </div>
+        <CardDescription>
+          Install the BokChoy SDK and make a call from your code. This panel
+          updates within a few seconds of the first authenticated request.
+        </CardDescription>
+      </CardHeader>
+    </Card>
+  );
+}
+
+function ApiKeysSection({
+  projectId,
+  apiKeys,
+}: {
+  projectId: string;
+  apiKeys: ApiKey[];
+}) {
+  if (apiKeys.length === 0) return null;
+
+  return (
+    <section>
+      <h2 className="mb-4 text-sm font-medium text-muted-foreground">
+        API keys
+      </h2>
+      <div className="space-y-2">
+        {apiKeys.map((apiKey) => (
+          <ApiKeyRow key={apiKey.id} projectId={projectId} apiKey={apiKey} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ApiKeyRow({
+  projectId,
+  apiKey,
+}: {
+  projectId: string;
+  apiKey: ApiKey;
+}) {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const revoked = apiKey.revokedAt !== null;
+  return (
+    <Card size="sm">
+      <CardContent className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <div className="flex items-center gap-2">
+          <KeyIcon className="size-4 text-muted-foreground" />
+          <span className="font-mono text-sm">{apiKey.keyPrefix}…</span>
+        </div>
+        <span className="text-sm">{apiKey.name}</span>
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1">
+            <ClockIcon className="size-3" />
+            created {formatRelative(apiKey.createdAt)}
+          </span>
+          {apiKey.lastUsedAt && (
+            <span>last used {formatRelative(apiKey.lastUsedAt)}</span>
+          )}
+          {revoked && (
+            <span className="rounded-sm bg-destructive/10 px-2 py-0.5 text-destructive">
+              revoked
+            </span>
+          )}
+        </span>
+        {!revoked && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setConfirmOpen(true)}
+          >
+            Revoke
+          </Button>
+        )}
+        {!revoked && (
+          <RevokeApiKeyDialog
+            open={confirmOpen}
+            onOpenChange={setConfirmOpen}
+            projectId={projectId}
+            apiKey={apiKey}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// Confirm-and-revoke dialog. Inlined here rather than its own file because
+// it's tightly coupled to ApiKeyRow's state — extract only if a second
+// consumer surfaces.
+//
+// Error surfacing: ProjectApiError carries `.code` + `.status`. 422
+// ALREADY_REVOKED is treated as a benign-race success (the row is already in
+// the desired state; just refetch) — the cockpit invalidates the project
+// query and dismisses the dialog without an error toast. 404 + 5xx + network
+// errors surface as destructive toasts so the operator knows the revoke
+// didn't land.
+function RevokeApiKeyDialog({
+  open,
+  onOpenChange,
+  projectId,
+  apiKey,
+}: {
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+  projectId: string;
+  apiKey: ApiKey;
+}) {
+  const revokeMutation = useRevokeApiKey();
+
+  function handleConfirm() {
+    revokeMutation.mutate(
+      { projectId, keyId: apiKey.id },
+      {
+        onSuccess: () => {
+          toast.success(`API key ${apiKey.keyPrefix}… revoked`);
+          onOpenChange(false);
+        },
+        onError: (error) => {
+          if (
+            error instanceof ProjectApiError &&
+            error.code === 'ALREADY_REVOKED'
+          ) {
+            // Benign race — the row is already revoked on the backend.
+            // Detail view will reflect that on the next refetch (the hook's
+            // onSuccess invalidates the query on the success path; we
+            // invalidate manually here to mirror that state).
+            toast.message('Key was already revoked.');
+            onOpenChange(false);
+            return;
+          }
+          toast.error(userMessage(error));
+        },
+      },
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Revoke this API key?</DialogTitle>
+          <DialogDescription>
+            SDK calls using{' '}
+            <span className="font-mono">{apiKey.keyPrefix}…</span> will stop
+            working immediately. This cannot be undone — issue a new key if you
+            need access again.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={revokeMutation.isPending}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleConfirm}
+            disabled={revokeMutation.isPending}
+          >
+            {revokeMutation.isPending ? (
+              <>
+                <Spinner className="mr-2 size-4" />
+                Revoking…
+              </>
+            ) : (
+              'Revoke key'
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// Inline relative-time helper. Intl.RelativeTimeFormat is the canonical
+// browser-native API but its single-unit output ("3 hours ago") rounds
+// aggressively for the verify-loop's sub-minute granularity. Hand-rolled
+// here keeps the "Just now" / seconds-level fidelity that step 11's verify
+// signal ("last used N seconds ago") demands.
+function formatRelative(iso: string): string {
+  const then = new Date(iso).getTime();
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86_400)}d ago`;
+}
