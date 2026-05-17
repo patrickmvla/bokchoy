@@ -89,8 +89,7 @@ export const currencies = pgTable(
 
 // ---------- wallets ----------
 // Pgledger row-per-(project, player, currency) pattern per
-// [[economy-primitives-research]] F4. Lazy-create on first credit via
-// INSERT … ON CONFLICT DO NOTHING (executed inside wallet_credit, not here).
+// [[economy-primitives-research]] F4.
 export const wallets = pgTable(
   'wallets',
   {

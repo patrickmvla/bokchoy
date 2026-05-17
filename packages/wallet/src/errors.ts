@@ -6,7 +6,10 @@
 // HTTP layer's switch on `code` is exhaustive across the BC namespace.
 // BC030/BC050/BC060 are reserved; BC050 is active via 23503 translation in
 // sqlstate-to-error.ts (constraint `transactions_project_reason_code_fk`).
-// BC060 has no active FK constraint that fires it today.
+// BC060 is active per slice M-1.5 (wallet_credit_by_external_id raises it
+// directly when the currencyCode is not registered for the project) per
+// [[wallet/credit-route-contract]] (i) — the handler catches BC060 and forms
+// the 404 + availableCodes response.
 
 export type BcCode =
   | 'BC001' // IdempotencyKeyInUse        — middleware (slice 4.6)
@@ -30,7 +33,7 @@ export type ErrorDetails =
   | { code: 'BC030' }
   | { code: 'BC040' }
   | { code: 'BC050'; constraintName: string }
-  | { code: 'BC060'; constraintName: string };
+  | { code: 'BC060'; currencyCode: string; projectId: string };
 
 export class WalletError extends Error {
   readonly code: BcCode;

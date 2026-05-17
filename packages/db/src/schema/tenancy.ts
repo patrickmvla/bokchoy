@@ -58,6 +58,15 @@ export const projects = pgTable(
 
 // Per-project, RLS-protected. Minimal-PII per [[player-auth]] §2: email/password
 // are nullable because guest play is the default flow.
+//
+// externalId per [[wallet/credit-route-contract]] (ii) — customer-controlled
+// opaque identifier used by SDK lazy-create-on-first-credit. Nullable because
+// players minted via Better Auth (email/password/anonymous) have no
+// customer-facing identifier; players minted via SDK credit lazy-create have
+// external_id set + email NULL. Regex is URL-path-safe (RFC 3986 unreserved
+// minus '~'); enforced as a Postgres CHECK so adversarial inputs fail at the
+// DB boundary. Unique per project where non-null — Postgres treats NULL as
+// distinct so existing NULL-external_id players don't collide.
 export const players = pgTable(
   'players',
   {
@@ -65,6 +74,7 @@ export const players = pgTable(
     projectId: uuid('project_id')
       .notNull()
       .references(() => projects.id, { onDelete: 'restrict' }),
+    externalId: text('external_id'),
     email: text('email'),
     passwordHash: text('password_hash'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -73,9 +83,16 @@ export const players = pgTable(
     under13: boolean('under_13'),
   },
   (t) => [
+    check(
+      'players_external_id_check',
+      sql`${t.externalId} IS NULL OR ${t.externalId} ~ '^[A-Za-z0-9._-]{1,128}$'`,
+    ),
     uniqueIndex('players_project_id_email_unique')
       .on(t.projectId, t.email)
       .where(sql`${t.email} IS NOT NULL`),
+    uniqueIndex('players_project_id_external_id_unique')
+      .on(t.projectId, t.externalId)
+      .where(sql`${t.externalId} IS NOT NULL`),
     index('idx_players_project').on(t.projectId),
     pgPolicy('tenant_isolation', {
       as: 'permissive',

@@ -17,11 +17,13 @@ const FK_TRANSLATION: Record<string, BcCode> = {
 
 // Capture non-whitespace tokens via \S+. UUIDs (36 chars, dashed) and numerics
 // (with or without decimals) never contain spaces — safe across the placeholder
-// shapes raised today.
+// shapes raised today. Currency codes are constrained to ^[A-Za-z0-9_]{1,16}$
+// per packages/db/src/schema/wallet.ts (currencies_code_check), also whitespace-free.
 const BC010_RE = /^InsufficientFunds: wallet=(\S+) requested=(\S+) available=(\S+)$/;
 const BC020_RE = /^TenantMismatch: GUC=(\S+) p_project_id=(\S+)$/;
 const BC021_RE = /^WalletNotFound: wallet_id=(\S+) project_id=(\S+)$/;
 const BC022_RE = /^CurrencyMismatch: wallet_currency=(\S+) requested=(\S+)$/;
+const BC060_RE = /^CurrencyNotFound: code=(\S+) project_id=(\S+)$/;
 
 export function sqlstateToError(
   code: string,
@@ -31,7 +33,7 @@ export function sqlstateToError(
   if (code === '23503') {
     if (constraintName === undefined) return null;
     const bc = FK_TRANSLATION[constraintName];
-    if (bc === 'BC050' || bc === 'BC060') {
+    if (bc === 'BC050') {
       return new WalletError({ code: bc, constraintName }, message);
     }
     return null;
@@ -70,6 +72,13 @@ export function sqlstateToError(
     case 'BC040':
       details = { code: 'BC040' };
       break;
+    case 'BC060': {
+      const m = BC060_RE.exec(message);
+      if (m && m[1] !== undefined && m[2] !== undefined) {
+        details = { code: 'BC060', currencyCode: m[1], projectId: m[2] };
+      }
+      break;
+    }
     default:
       return null;
   }

@@ -26,7 +26,17 @@ export {
 export { type BcCode, type ErrorDetails, WalletError } from './errors';
 export { sqlstateToError } from './sqlstate-to-error';
 export { type WalletCreditParams, walletCredit } from './wallet-credit';
+export {
+  type WalletCreditByExternalIdParams,
+  type WalletCreditByExternalIdResult,
+  walletCreditByExternalId,
+} from './wallet-credit-by-external-id';
 export { type WalletDebitParams, walletDebit } from './wallet-debit';
+export {
+  type WalletDebitByExternalIdParams,
+  type WalletDebitByExternalIdResult,
+  walletDebitByExternalId,
+} from './wallet-debit-by-external-id';
 export {
   type WalletDeidentifyPlayerParams,
   walletDeidentifyPlayer,

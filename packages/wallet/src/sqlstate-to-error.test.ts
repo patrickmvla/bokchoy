@@ -71,6 +71,19 @@ test('BC010 with malformed message returns null (parse failure → re-raise)', (
   expect(err).toBeNull();
 });
 
+test('BC060 CurrencyNotFound parses currencyCode and projectId', () => {
+  const err = sqlstateToError(
+    'BC060',
+    'CurrencyNotFound: code=gems project_id=44444444-4444-4444-4444-444444444444',
+    undefined,
+  );
+  expect(err?.code).toBe('BC060');
+  if (err?.details.code === 'BC060') {
+    expect(err.details.currencyCode).toBe('gems');
+    expect(err.details.projectId).toBe('44444444-4444-4444-4444-444444444444');
+  }
+});
+
 test('23503 with transactions_project_reason_code_fk → BC050', () => {
   const err = sqlstateToError(
     '23503',

@@ -12,6 +12,38 @@
 
 import { sqlstateToError } from './sqlstate-to-error';
 
+// Shared row-field readers for wrappers that select multiple columns from a
+// SQL function returning TABLE(...) (e.g. wallet_credit_by_external_id).
+// postgres-js returns uuid/text as JS string and NUMERIC as JS string (to
+// preserve precision past 2^53). The numeric case may downgrade to JS number
+// when the value fits losslessly — both shapes are accepted.
+
+export function rowField(rows: unknown, alias: string): unknown {
+  if (typeof rows !== 'object' || rows === null) {
+    throw new Error(`expected rows object, got ${typeof rows}`);
+  }
+  const arr = rows as ArrayLike<Record<string, unknown>>;
+  if (arr.length < 1) {
+    throw new Error('SQL function returned no rows');
+  }
+  return arr[0]?.[alias];
+}
+
+export function readUuidOrText(rows: unknown, alias: string): string {
+  const value = rowField(rows, alias);
+  if (typeof value !== 'string') {
+    throw new Error(`unexpected ${alias} type: ${typeof value}`);
+  }
+  return value;
+}
+
+export function readNumericAsString(rows: unknown, alias: string): string {
+  const value = rowField(rows, alias);
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return value.toString();
+  throw new Error(`unexpected ${alias} type: ${typeof value}`);
+}
+
 export function rowToNumber(rows: unknown, alias: string): number {
   if (typeof rows !== 'object' || rows === null) {
     throw new Error(`expected rows object, got ${typeof rows}`);
