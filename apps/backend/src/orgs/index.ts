@@ -71,9 +71,5 @@ async function getOrgMeHandler(c: Context<AdminContext, '/v1/orgs/me'>) {
 }
 
 export function mountOrgsRoutes(app: Hono<OrgsAppContext>): void {
-  app.get(
-    '/v1/orgs/me',
-    adminGate({ resource: 'org', actions: ['read'] }),
-    getOrgMeHandler,
-  );
+  app.get('/v1/orgs/me', adminGate({ resource: 'org', actions: ['read'] }), getOrgMeHandler);
 }

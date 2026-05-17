@@ -34,11 +34,11 @@
 //     projectIdParam tenancy check confirmed it belongs to the org).
 
 import { createHmac, randomBytes } from 'node:crypto';
-import { apiKeys, projects, withTenant } from '@bokchoy/db';
+import { apiKeys, currencies, projects, withTenant } from '@bokchoy/db';
 import { type Hook, sValidator } from '@hono/standard-validator';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
 import type { StandardSchemaV1 } from '@standard-schema/spec';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Context, Env, Hono } from 'hono';
 import { z } from 'zod';
 import { type AdminContext, adminGate } from '../admin';
@@ -144,18 +144,50 @@ async function createProjectHandler(c: Context<AdminContext, '/v1/projects'>) {
     },
     async (span) => {
       try {
-        const [row] = await db
-          .insert(projects)
-          .values({
-            organizationId,
-            name: body.name,
-            slug: body.slug,
-          })
-          .returning();
-        if (!row) {
-          throw new Error('projects.insert returned no row');
-        }
+        // Slice M-2 — single transaction wraps project INSERT + seeded
+        // currencies INSERT per [[marketing/v1-shape]] Mitigation #3 +
+        // [[cockpit/first-run-journey]] step 6 (amendment owed). Atomicity:
+        // if the currencies seed fails for any reason, the project insert
+        // rolls back too — preventing the half-state (project exists, day-1
+        // marketing snippet `currency: 'gems'` fails with UnknownCurrencyError).
+        //
+        // We DON'T compose `withTenant(db, ...)` here because that opens its
+        // own transaction; nesting would create a savepoint and split the
+        // atomicity guarantee. Instead the GUC SET is inlined via the same
+        // `set_config(..., is_local=true)` pattern that withTenant uses at
+        // packages/db/src/with-tenant.ts:26 — transaction-scoped, applies to
+        // the currencies INSERT below, automatically released on commit/rollback.
+        const row = await db.transaction(async (tx) => {
+          const [inserted] = await tx
+            .insert(projects)
+            .values({
+              organizationId,
+              name: body.name,
+              slug: body.slug,
+            })
+            .returning();
+          if (!inserted) {
+            throw new Error('projects.insert returned no row');
+          }
+
+          await tx.execute(sql`SELECT set_config('app.current_tenant', ${inserted.id}, true)`);
+
+          // Default currency set per [[marketing/v1-shape]] hero snippet:
+          // `currency: 'gems'`. Display-name title-case follows the
+          // game-economy SDK convention surveyed in
+          // [[marketing/currencies-endpoint-research]]. decimals + isPremium
+          // + isTradable fall to schema defaults (0, false, false) —
+          // customer can update via cockpit later.
+          await tx.insert(currencies).values([
+            { projectId: inserted.id, code: 'gems', displayName: 'Gems' },
+            { projectId: inserted.id, code: 'coins', displayName: 'Coins' },
+          ]);
+
+          return inserted;
+        });
+
         span.setAttribute('bokchoy.project_id', row.id);
+        span.setAttribute('bokchoy.seeded_currency_count', 2);
         return row;
       } catch (err) {
         if (err instanceof Error) {

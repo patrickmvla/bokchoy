@@ -39,6 +39,7 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { AdminContext } from './admin';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
+import { mountCurrenciesRoutes } from './currencies';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
 import { auth, db, errorMiddleware } from './infra';
 import { mountOrgsRoutes } from './orgs';
@@ -126,6 +127,10 @@ mountOrgsRoutes(app);
 
 // Slice 8.4 — projects + api-keys cockpit-admin routes per [[cockpit/admin-list-endpoints-contract]].
 mountProjectsRoutes(app);
+
+// Slice M-1 — SDK-facing currencies list per [[marketing/v1-shape]] Cascade #2.
+// Behind apiKeyMiddleware, NOT adminGate (SDK consumer flow).
+mountCurrenciesRoutes(app);
 
 // Slice 8.1c — wallet credit/debit routes per [[wallet-http-contract]].
 mountWalletRoutes(app);
