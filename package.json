@@ -41,6 +41,7 @@
     "check:prepare-false": "bun scripts/check-prepare-false.ts",
     "check:direct-mutation": "bun scripts/check-direct-wallet-mutation.ts",
     "check:auth-roles": "bun scripts/check-auth-roles.ts",
+    "lint:comments": "bun scripts/check-comment-density.ts",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {
