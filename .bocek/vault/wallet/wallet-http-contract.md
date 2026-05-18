@@ -141,8 +141,14 @@ app.onError((err, c) => {
 |---|---|---|---|
 | `walletCredit` | `POST /v1/wallets/{walletId}/credit` | SDK API key | 8.1c |
 | `walletDebit` | `POST /v1/wallets/{walletId}/debit` | SDK API key | 8.1c |
+| `walletCreditByExternalId` | `POST /v1/players/{playerExternalId}/wallets/{currencyCode}/credit` | SDK API key | M-1.5 |
+| `walletDebitByExternalId` | `POST /v1/players/{playerExternalId}/wallets/{currencyCode}/debit` | SDK API key | M-1.5 |
+| `walletBalanceByExternalId` | `GET /v1/players/{playerExternalId}/wallets/{currencyCode}` | SDK API key | GAP 11 |
+| `walletHistoryByExternalId` | `GET /v1/players/{playerExternalId}/wallets/{currencyCode}/transactions` | SDK API key | GAP 11 |
 | `walletDeidentifyPlayer` | `POST /v1/players/{playerId}/deidentify` | TBD (cockpit admin OR DSR flow) | post-8.1 |
 | `bootstrapProjectReasonCodes` | `POST /v1/projects/{projectId}/bootstrap-reason-codes` | TBD (cockpit admin) | post-8.1 |
+
+The GAP 11 GET routes are read-only sibling endpoints to the M-1.5 player-centric POST routes. Per `[[wallet/balance-history-contract]]` (ii) they skip `idempotencyMiddleware` (GETs are naturally idempotent; Stripe production convention scopes `Idempotency-Key` to mutating operations only). Stateless reads per (iii) — unknown player/wallet → 200 synthesized zero/empty, no row materialization. Per-row `balanceAfter` is OMITTED from the history response shape per the audience-class verdict in `[[wallet/.research/per-row-running-balance-research]]`.
 
 `projectId` from validated API-key row (`c.get('projectId')`), NOT from path or header. `walletId`/`playerId`/`projectId-as-resource-id` from URL path. `playerId` for credit/debit is server-derived from the wallet row (wallet → player FK), not in the request body.
 

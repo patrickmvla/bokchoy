@@ -466,4 +466,167 @@ Decision vaulted at `.bocek/vault/_shared/direct-mutation-lint-opt-out-shape.md`
 
 ---
 
-## Summary (updated 2026-05-10 — 10 gaps total, gaps 1–7 resolved 2026-05-04; gap 8 deferred-and-downgraded; gap 9 RESOLVED 2026-05-09 via `[[wallet-http-contract]]`; gap 10 RESOLVED 2026-05-10 via `[[direct-mutation-lint-opt-out-shape]]`)
+## GAP 11 (surfaced 2026-05-18, slice "balance/history go live"): player-centric balance + history contract undefined
+
+**Blocked step:** the SDK methods + backend endpoints that turn `apps/cockpit/modules/marketing/components/code-walkthrough.tsx`'s `// Coming soon` blocks live. M-5 landed the marketing surface with `credit` + `debit` shipped and `balance` + `history` deliberately stubbed pending this design pass (Option B per the user-ratified M-5 decision; see `.bocek/state.md` 2026-05-17). `[[marketing/v1-shape]]` Cascade #10 commits to "3-4 sibling SDK operations (credit + debit + balance + history) with the same friendly-name register as the hero" — register is committed, wire shape isn't.
+
+**What's missing:** A coherent design pass for a player-centric balance + history HTTP surface and matching SDK methods. The closest existing references are misaligned:
+
+- `[[_shared/url-pattern-research]]` (2026-05-09) F2 mentions `GET /v1/wallets/{walletId}` (balance) and `GET /v1/wallets/{walletId}/transactions` (history) as future-slice candidates — but those are **walletId-keyed**, written before M-1.5's player-centric layer landed. Reading them as the contract would force the SDK to expose walletId, contradicting `[[marketing/v1-shape]]` (iii) friendly-name register and the `wallets.credit({ player, currency, ... })` shape that M-4 shipped.
+- `[[wallet/credit-route-contract]]` covers credit + debit only.
+- `[[wallet/wallet-http-contract]]` covers the wallet-id-keyed routes from slice 8.1c — predates M-1.5.
+- `[[wallet/wrapper-shape]]` covers the `walletCredit`/`walletDebit` wrappers; no balance-read or history-read wrapper exists in `packages/wallet/`.
+
+Twelve sub-decisions cluster, none individually large, but each shapes the public API surface and downstream SDK ergonomics. Structurally similar to GAP 9 (which resolved as `[[wallet-http-contract]]`).
+
+### G11.1 URL shape — balance
+
+- `GET /v1/players/{playerExternalId}/wallets/{currencyCode}` — fetch the wallet resource. REST nounification.
+- `GET /v1/players/{playerExternalId}/wallets/{currencyCode}/balance` — slash-suffix-verb, matches credit/debit pattern via `[[_shared/url-pattern-research]]` F1.
+- `GET /v1/wallets/{walletId}` — walletId-keyed legacy shape; SDK would have to expose walletId.
+
+Picking the GET-on-resource shape (a) loses the slash-suffix-verb consistency credit/debit has; picking (b) loses REST coherence ("balance is a property, not an action"). Either reads idiomatic in isolation; the inconsistency only shows on grep across the route table.
+
+### G11.2 URL shape — history
+
+- `GET /v1/players/{playerExternalId}/wallets/{currencyCode}/transactions` — nested-resource, scoped to one wallet (one currency × one player). Stripe-shape (`/v1/customers/{id}/balance_transactions`).
+- `GET /v1/players/{playerExternalId}/transactions` — scoped to one player across all currencies. Useful for cross-currency activity feed; SDK shape is `wallets.history({ player })` with optional `currency?`.
+- `GET /v1/transactions?player=...&currency=...&...` — flat collection with query-string filters. Most flexible; most ergonomic for cockpit audit. Loses the "owned by player" semantic anchor.
+
+Picks compound with G11.5 (filter shape). Stripe-shape (a) is the tightest fit with credit/debit's URL; (c) is closest to the cockpit audit panel that doesn't exist yet but is in the spine (`[[mvp-feature-sequence]]` Month 6 faucet/drain dashboard).
+
+### G11.3 Unknown-player semantics on read
+
+Credit lazy-creates on first call (M-1.5 contract (iii)). Balance + history on read have different stakes:
+
+- **Lazy-create on read** — mirrors credit; `balance: "0"` on unknown player is consistent. But conflates "no transactions" with "player doesn't exist" — bad for audit + bad for client-side error UX.
+- **404 UnknownPlayerError** — typed exception with available hint. Distinguishes the two states. Inconsistent with credit's lazy-create.
+- **404 only for history; balance lazy-creates** — credit/balance use the same lifecycle (player wallet exists once credited); history is "give me what's logged" which 404s naturally on unknown.
+
+Sub-decision: if 404, does the SDK throw `UnknownPlayerError` (currently defined in `packages/sdk-node/src/errors.ts` but unused — the M-4 contract reserved it for "future explicit-create flow")? This is the future explicit-create flow.
+
+### G11.4 Pagination shape (history)
+
+- **Cursor (Stripe-shape):** `?starting_after=txn_id&limit=N` returning `{data: [...], has_more, next_cursor?}`. Stable under concurrent writes. Production-cited × Stripe.
+- **Offset (`?page=N&limit=N`):** simpler; unstable under concurrent writes (rows shift between pages). Anti-pattern for high-write audit logs.
+- **Keyset on `(created_at DESC, id DESC)`:** opaque cursor encoding both fields; handles ties. More involved server side.
+
+Default page size, max page size, ordering all sit here. Default ordering is presumed `created_at DESC` (newest-first for activity feeds) — but not vaulted. Max page size affects backend memory ceiling.
+
+### G11.5 Filter shape (history)
+
+- **No filters at MVP:** simplest; cockpit audit can grow filters later. Customers running their own dashboards will pull all and filter client-side. Workable at low cardinality, breaks at scale.
+- **`?from=ISO&to=ISO`:** date-range filter, common pattern.
+- **`?kind=currency_credit|currency_debit`:** operation-type filter. Maps to `transactions.kind`.
+- **`?reasonCode=signup_bonus`:** business-context filter. Maps to `transactions.reason_code`.
+
+Compounds with G11.2. Stripe ships rich filters on `/v1/balance_transactions`; PlayFab's inventory-history is minimal. Indie-scale (BokChoy's audience class) tends minimal.
+
+### G11.6 Balance response shape
+
+What's on the wire for the balance response:
+
+- **Minimal:** `{ walletId, playerId, currencyCode, balance: string }` — string-typed for NUMERIC(20,4) precision per `[[wallet/wrapper-shape]]` rationale.
+- **Plus updatedAt:** add `updatedAt: ISO` from `wallets.updated_at`. Useful for staleness checks if the SDK ever caches.
+- **Plus lastTransactionId:** add `lastTransactionId: number` for client-side "did anything change since I last looked" optimistic logic.
+
+Field-set conventions per `[[marketing/currencies-endpoint-research]]` F4 (audience-scale-matched minimal pattern). Adding later is non-breaking under standard SDK consumer semantics.
+
+### G11.7 History response shape (per-transaction fields)
+
+The `transactions` table per `[[wallet-mechanics]]` §3 has ~12 columns. Which are on the wire:
+
+- **Core:** `id`, `createdAt`, `kind`, `amount: string`, `reasonCode`, `balanceAfter: string`.
+- **Sometimes:** `currencyCode` (redundant when filtered by URL but useful for cross-currency endpoint G11.2 b/c), `sourceEventId`, `idempotencyKeyId`, `relatedId`, `relatedType`, `metadata`.
+- **Never on the wire:** `project_id` (implicit via auth), `wallet_id` (redundant), `player_id` (redundant when URL-scoped).
+
+The `balanceAfter` per-row column lets clients render running totals without re-computing — but `transactions` may or may not have this column today. Need to check.
+
+Sub-decision: does the row order in the response match `ORDER BY created_at DESC, id DESC` per G11.4 default, or the reverse (older-first chronological)? Activity feed convention is newest-first.
+
+### G11.8 OTel span name + attributes
+
+Following the M-1.5 player-centric attribute set verbatim:
+
+- `wallet.balance` span: `bokchoy.project_id`, `bokchoy.player_external_id_hash` (HMAC), `bokchoy.currency_code`, `bokchoy.balance_returned: string`. (Last attr is post-query — emit only on success.)
+- `wallet.history` span: same set without balance; `bokchoy.transaction_count` post-query, `bokchoy.cursor: 'first_page' | 'paginated'`.
+
+Sub-decision: span name `wallet.balance` vs `wallet.read_balance` — slash-suffix-verb URL would suggest the verb form. The credit/debit span names are `wallet.credit` / `wallet.debit` (action form). Consistency lean: `wallet.balance` / `wallet.history`.
+
+### G11.9 Idempotency middleware on GETs
+
+GETs are naturally idempotent (no side effects). The current `idempotencyMiddleware` runs on POSTs in `mountWalletRoutes`. Three positions:
+
+- **Skip on GET:** apply only to POST. Standard. SDK doesn't send Idempotency-Key for reads. (Stripe-shape.)
+- **Accept-and-ignore on GET:** middleware runs, header is recorded for diagnostic but no replay logic. Adds noise.
+- **Wire it for caching:** GET responses cached in `idempotency_keys` for replay savings. Out of scope at MVP; ETag is the right primitive instead.
+
+Recommendation lean: (a). Worth pinning so the future cockpit audit endpoint doesn't accidentally hold a different posture.
+
+### G11.10 SDK method shape
+
+The `WalletsApi` class currently exposes `credit` + `debit`. New methods:
+
+- `wallets.balance({ player, currency }): Promise<Balance>` where `Balance = { walletId, playerId, currencyCode, balance: string, updatedAt?: string }`.
+- `wallets.history({ player, currency?, limit?, startingAfter?, ... }): Promise<{ data: Transaction[], hasMore: boolean, nextCursor?: string }>`.
+
+The `currency?` optional on history depends on G11.2 — if URL is `/v1/players/{externalId}/wallets/{currency}/transactions`, currency is required. If URL is `/v1/players/{externalId}/transactions`, currency is an optional filter.
+
+Auto-pagination helper: `for await (const txn of wallets.history({...}).autoPaginate())` — Stripe-shape. Defer to a future SDK version; M-5 marketing snippet doesn't need it.
+
+### G11.11 Auth surface (read scope)
+
+Same `apiKeyMiddleware` as credit/debit at MVP — the customer's game server reads its own players' balances. Trivial. Worth pinning so future read-only sub-scope (game-client-direct calls instead of game-server-proxied) doesn't break callers.
+
+### G11.12 Wrapper-layer obligation
+
+`packages/wallet/` exports `walletCredit` / `walletDebit` per `[[wallet/wrapper-shape]]`. Balance + history need matching wrappers:
+
+- `walletBalanceByExternalId(tx, { projectId, playerExternalId, currencyCode })`: returns the wallet row (RLS-scoped).
+- `walletHistoryByExternalId(tx, { projectId, playerExternalId, currencyCode?, limit, startingAfter?, ... })`: returns rows from `transactions` (RLS-scoped, sorted, paginated).
+
+Both are RLS-scoped reads — they don't need stored functions like credit/debit (which need atomicity + SECURITY DEFINER). Plain Drizzle queries inside `withTenant`. But the wrapper shape is still owed to keep the route handler clean and matches the `[[wrapper-shape]]` discipline. Sub-decision: error class? Probably a new `WalletError` code `BC0xx` for the 404 cases, or handler-local error mapping like M-1.5's UNKNOWN_CURRENCY.
+
+### Engineering substance at stake
+
+- **API contract permanence:** G11.1 + G11.2 + G11.4 + G11.6 + G11.7 set the public read surface. Cascades to the cockpit audit panel (Month 6 deliverable per `[[mvp-feature-sequence]]`).
+- **Failure semantics:** G11.3's lazy-create-vs-404 affects every customer who calls `balance` before `credit` (which is the common "show empty wallet on first login" flow).
+- **Security:** G11.11 — read-scope auth pins the trust boundary. RLS via `withTenant` covers per-tenant isolation.
+- **Observability:** G11.8 attribute set is what the future cockpit dashboard groups by.
+- **Marketing alignment:** the M-5 placeholder copy already names balance + history operations. Whatever SDK call shape /design picks, the `code-walkthrough.tsx` snippets need to update verbatim. Picking inconsistent register (e.g., `wallets.getBalance` vs marketing's `wallets.balance`) ships a contradiction to the apex landing page.
+
+### Unvetted options (clearly NOT recommendations)
+
+For G11.1 (URL — balance):
+1. `GET /v1/players/{externalId}/wallets/{currencyCode}` — REST resource read. (No production cite specifically for game-economy class.)
+2. `GET /v1/players/{externalId}/wallets/{currencyCode}/balance` — slash-suffix-verb; matches credit/debit. (Action-form precedent.)
+3. PlayFab-shape RPC: `POST /v1/players/{externalId}/wallets/{currencyCode}/get-balance`. Misfit; reads as a mutation.
+
+For G11.2 (URL — history):
+1. `GET /v1/players/{externalId}/wallets/{currencyCode}/transactions` — Stripe-shape nested. (Stripe `/v1/customers/{id}/balance_transactions`.)
+2. `GET /v1/players/{externalId}/transactions?currency=...` — per-player flat. SDK shape simpler.
+3. `GET /v1/transactions?player=...&currency=...` — global with query filters. Cockpit-audit-friendly.
+
+For G11.3 (unknown-player on read):
+1. Lazy-create on balance, 404 on history. Mixed.
+2. 404 on both. Strict.
+3. Lazy-create on both. Permissive.
+
+For G11.4 (pagination):
+1. Cursor (Stripe `starting_after` / `limit`, `has_more` flag).
+2. Offset (`page` / `limit`). Anti-pattern for audit logs.
+3. Keyset on `(created_at DESC, id DESC)` with opaque-cursor encoding.
+
+For G11.10 (SDK signature):
+1. `wallets.balance({ player, currency })` + `wallets.history({ player, currency?, limit?, startingAfter? })`. Friendly-name register.
+2. Verb-form: `wallets.getBalance` + `wallets.listHistory`. Inconsistent with `credit`/`debit` register.
+
+### To resolve
+
+`/design` recommended. The cluster's shape (12 sub-decisions across URL, pagination, response shape, error model, SDK API, OTel) is structurally GAP 9-sized; one /design pass with `[[_shared/url-pattern-research]]` F1 + Stripe shape + the M-1.5 player-centric register as the floor can resolve them coherently. Likely vault output: a new entry `[[wallet/balance-history-contract]]` (sibling to `[[wallet/credit-route-contract]]`) and a small amendment to `[[wallet-http-contract]]` to register the new endpoints.
+
+`/implementation` resumes once the entry lands — wrapper-layer + backend handlers + SDK methods + `code-walkthrough.tsx` snippet update become a quote-and-execute slice with no remaining gaps. Marketing surface flips from "Coming soon" to live.
+
+---
+
+## Summary (updated 2026-05-18 — 11 gaps total, gaps 1–7 resolved 2026-05-04; gap 8 deferred-and-downgraded; gap 9 RESOLVED 2026-05-09 via `[[wallet-http-contract]]`; gap 10 RESOLVED 2026-05-10 via `[[direct-mutation-lint-opt-out-shape]]`; gap 11 OPEN — `/design` recommended for `[[wallet/balance-history-contract]]`)
