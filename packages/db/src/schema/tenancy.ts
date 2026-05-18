@@ -1,14 +1,4 @@
-// Tenancy primitives.
-//
-// Per [[tenancy-ids-research]] F6 (projects baseline) and [[player-auth]] §2 (players).
-// projects is the FK target referenced by current_setting('app.current_tenant')::UUID
-// in every multi-tenant RLS policy per [[wallet-mechanics]] §8 +
-// [[multi-tenant-rls-research]].
-//
-// Column names are snake_case in Postgres / camelCase in JS (Drizzle convention).
-//
-// RLS policies + FORCE ROW LEVEL SECURITY land in a separate migration per
-// [[wallet-mechanics]] §8.
+/** Tenancy primitives — projects (tenant root) + players. Per [[wallet-mechanics]] §8 RLS chain. */
 
 import { sql } from 'drizzle-orm';
 import {
@@ -25,15 +15,9 @@ import {
 } from 'drizzle-orm/pg-core';
 import { organization } from './auth';
 
-// Canonical tenant-isolation predicate per [[wallet-mechanics]] §8 +
-// [[multi-tenant-rls-research]]. The GUC is set per-transaction by withTenant().
-// Unset GUC raises (one-arg form of current_setting) — surfaces missing-context
-// bugs immediately instead of silently denying or allowing.
+// Unset GUC raises via one-arg current_setting — surfaces missing-context bugs loud, not silent.
 const TENANT_GUC = sql`current_setting('app.current_tenant')::uuid`;
 
-// Tenancy root. Better Auth's `advanced.database.generateId: "uuid"` is REQUIRED
-// in the auth-config (set per [[tenancy-ids-research]] F1) so organization.id is
-// uuid-typed; this FK lines up at the type level.
 export const projects = pgTable(
   'projects',
   {
@@ -56,17 +40,7 @@ export const projects = pgTable(
   ],
 );
 
-// Per-project, RLS-protected. Minimal-PII per [[player-auth]] §2: email/password
-// are nullable because guest play is the default flow.
-//
-// externalId per [[wallet/credit-route-contract]] (ii) — customer-controlled
-// opaque identifier used by SDK lazy-create-on-first-credit. Nullable because
-// players minted via Better Auth (email/password/anonymous) have no
-// customer-facing identifier; players minted via SDK credit lazy-create have
-// external_id set + email NULL. Regex is URL-path-safe (RFC 3986 unreserved
-// minus '~'); enforced as a Postgres CHECK so adversarial inputs fail at the
-// DB boundary. Unique per project where non-null — Postgres treats NULL as
-// distinct so existing NULL-external_id players don't collide.
+/** Minimal-PII per [[player-auth]] §2: email/password nullable (guest play default). external_id regex matches DB CHECK. */
 export const players = pgTable(
   'players',
   {
@@ -103,6 +77,4 @@ export const players = pgTable(
   ],
 ).enableRLS();
 
-// Re-export the GUC SQL helper so wallet.ts (and future protected schemas)
-// share one definition rather than restating the cast.
 export { TENANT_GUC };

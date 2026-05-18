@@ -1,14 +1,3 @@
-// GET /v1/orgs/me fetch wrapper.
-//
-// Routes through the cockpit's relative-path /v1/* per (P1) reverse-proxy.
-// Cookies stay first-party; Better Auth session validates server-side via
-// adminGate per [[admin-auth-surface]] D1.
-//
-// Bare response per [[cockpit/admin-list-endpoints-contract]] (R2). On
-// non-2xx the cockpit gets a Stripe-wrapped error envelope — surfaced via
-// OrgApiError so the caller can branch on .code if needed (BC401 expired
-// session, BC404 not-a-member, etc.).
-
 import type { OrgMe } from '../types';
 
 export class OrgApiError extends Error {

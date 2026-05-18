@@ -1,17 +1,4 @@
-// @bokchoy/sdk-node — official Node.js / TypeScript SDK for BokChoy wallet
-// infrastructure.
-//
-// Per [[marketing/v1-shape]] (iii) the public API uses friendly names
-// (`player`, `currency: 'gems'`, `reason: 'level_up_reward'`); per
-// [[wallet/credit-route-contract]] cascade #11 the client is a thin POSTer
-// to the player-centric routes — no slug-resolver, no per-process cache —
-// and named exception classes relay backend 404 response bodies for the
-// caller to dispatch on.
-//
-// Cross-runtime: targets Node 20+, Bun, Cloudflare Workers, Deno, and modern
-// browsers. The HTTP layer reaches for globalThis.fetch + globalThis.crypto
-// — both standard across all listed runtimes — and the fetch implementation
-// can be replaced via the constructor for testing or custom HTTP middleware.
+/** @module @bokchoy/sdk-node — official Node/TypeScript SDK for BokChoy wallets. */
 
 import { type FetchLike, HttpClient } from './http';
 import { WalletsApi } from './wallets';

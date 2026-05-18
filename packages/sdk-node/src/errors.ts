@@ -1,25 +1,3 @@
-// BokChoy SDK error hierarchy per [[wallet/credit-route-contract]] cascade #11 +
-// [[marketing/v1-shape]] Mitigation #1.
-//
-// Two contract-mandated classes:
-//   • UnknownCurrencyError — backend 404 UNKNOWN_CURRENCY; the typed
-//     `availableCodes: string[]` property lets callers programmatically present
-//     the named alternatives, and the human-readable message lists them too.
-//   • UnknownPlayerError  — reserved class for the symmetric future case (the
-//     current backend lazy-creates players on first credit so this is not
-//     currently raised; the class is part of the SDK surface so a future
-//     reject-with-error flow can switch on it).
-//
-// Plus three thin Stripe-pattern wrappers for high-frequency dispatch
-// targets — Authentication (401), Validation (400), and a generic
-// BokchoyApiError catch-all for everything else (BC010 InsufficientFunds,
-// BC050 UNKNOWN_REASON_CODE, etc.). Customers dispatch by `instanceof` for
-// the named classes and by `.code` for the BCxxx variants. Per Stripe's
-// shape — production-cited × 1 (Stripe SDK class hierarchy verbatim).
-//
-// BokchoyConnectionError covers fetch-threw / JSON-parse-failure / non-Error
-// rejections — the network or parse layer, not a structured server response.
-
 /**
  * Base class for all BokChoy SDK errors. `instanceof BokchoyError` catches
  * every error this SDK throws (API errors, connection errors).
@@ -94,13 +72,7 @@ export class BokchoyValidationError extends BokchoyApiError {
   }
 }
 
-/**
- * 404 UNKNOWN_CURRENCY — the currency slug passed to wallets.credit/debit is
- * not registered for this project. `availableCodes` lists every currency
- * code registered for the project, so the caller can present alternatives
- * (typo correction in a CLI tool, dropdown population, retry-with-different-
- * currency logic). `currencyCode` echoes the offending value.
- */
+/** 404 UNKNOWN_CURRENCY — currency slug not registered. `availableCodes` lists registered alternatives. */
 export class UnknownCurrencyError extends BokchoyApiError {
   readonly currencyCode: string;
   readonly availableCodes: ReadonlyArray<string>;
@@ -123,13 +95,7 @@ export class UnknownCurrencyError extends BokchoyApiError {
   }
 }
 
-/**
- * 404 UNKNOWN_PLAYER — reserved for the future explicit-create flow. The
- * current backend lazy-creates players on first credit per
- * [[wallet/credit-route-contract]] (iii), so this is NOT raised today.
- * The class is exported so a future `wallets.create({ player })` flow that
- * rejects unknown players can switch on it.
- */
+/** 404 UNKNOWN_PLAYER — reserved for a future explicit-create flow; not raised by today's backend. */
 export class UnknownPlayerError extends BokchoyApiError {
   readonly playerExternalId: string;
 

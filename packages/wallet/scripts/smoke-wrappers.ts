@@ -22,15 +22,8 @@
 //  11. bootstrapProjectReasonCodes — first call inserts 12; second call inserts 0.
 
 import { createDbClient, withTenant } from '@bokchoy/db';
-import { sql } from 'drizzle-orm';
 import postgres from 'postgres';
-import {
-  bootstrapProjectReasonCodes,
-  WalletError,
-  walletCredit,
-  walletDebit,
-  walletDeidentifyPlayer,
-} from '../src/index';
+import { bootstrapProjectReasonCodes, WalletError, walletCredit, walletDebit } from '../src/index';
 
 const APP_URL = process.env.DATABASE_URL;
 const MIG_URL = process.env.DATABASE_MIGRATION_URL;

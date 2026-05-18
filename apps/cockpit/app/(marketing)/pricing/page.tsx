@@ -1,17 +1,3 @@
-// Pricing placeholder per [[marketing/v1-shape]] Cascade obligation #4.
-// Copy verbatim from the vault:
-//   "Usage-based pricing. Free during private beta. Contact for
-//    production estimates."
-//
-// Lives behind the (marketing)/ route group → shares chrome (top-nav +
-// footer) with the apex landing. Server Component.
-//
-// Revisit trigger per [[marketing/v1-shape]] *Revisit when* — when
-// billing infrastructure ships AND there's a committed price sheet to
-// publish. Until then, the placeholder is honest (we don't know our
-// production pricing yet) and the mailto: hands the prospect to the
-// human team.
-
 export default function PricingPage() {
   return (
     <section className="mx-auto flex max-w-3xl flex-col items-center gap-5 px-4 py-24 text-center sm:py-32">

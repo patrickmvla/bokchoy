@@ -1,9 +1,3 @@
-// Sign-up route at bokchoy.com/sign-up per [[cockpit-stack-integration-research]]
-// F7 + [[cockpit/first-run-journey]] step 1 (email/password sign-up surface).
-//
-// OUTSIDE the (app)/ route group — no auth gate. Public-reachable by design.
-// Server Component shell; the interactive form lives in <SignUpForm>.
-
 import Link from 'next/link';
 import { SignUpForm } from '@/modules/auth/components/sign-up-form';
 

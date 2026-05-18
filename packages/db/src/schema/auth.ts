@@ -1,24 +1,6 @@
-// Better Auth schema, hand-translated for Drizzle.
-// Per [[backend-stack]] cascade: drizzle-kit migrate ONLY; Better Auth's
-// getMigrations doesn't support the Drizzle adapter.
-// Per [[tenancy-ids-research]] F1: advanced.database.generateId: "uuid"
-// MUST be set in the Better Auth config; otherwise the runtime UUIDs that
-// Better Auth generates will not match the uuid column type below and the
-// RLS GUC chain (current_setting('app.current_tenant')::UUID) breaks at the
-// first cast.
-//
-// Source-walked from better-auth/better-auth@6b03a45a:
-//   packages/core/src/db/get-tables.ts (user, session, account, verification)
-//   packages/better-auth/src/plugins/organization/schema.ts (organization, member, invitation)
-//   packages/better-auth/src/plugins/anonymous/schema.ts (user.isAnonymous)
-//
-// Column names are camelCase to match Better Auth's runtime field-name
-// convention. Better Auth's drizzleAdapter issues queries by JS property
-// name; Drizzle uses the same name as the Postgres column unless overridden.
+/** Better Auth schema, hand-translated for Drizzle. Column names camelCase to match Better Auth's runtime fields. */
 
 import { boolean, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-
-// ---------- core auth ----------
 
 export const user = pgTable('user', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -26,7 +8,6 @@ export const user = pgTable('user', {
   email: text('email').notNull().unique(),
   emailVerified: boolean('emailVerified').notNull().default(false),
   image: text('image'),
-  // anonymous plugin field
   isAnonymous: boolean('isAnonymous').notNull().default(false),
   createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -41,8 +22,7 @@ export const session = pgTable('session', {
   userId: uuid('userId')
     .notNull()
     .references(() => user.id, { onDelete: 'cascade' }),
-  // organization plugin field — non-FK because it can outlive the org row;
-  // application code resolves on read.
+  // Non-FK: can outlive the org row; application code resolves on read.
   activeOrganizationId: uuid('activeOrganizationId'),
   createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -80,8 +60,6 @@ export const verification = pgTable('verification', {
   createdAt: timestamp('createdAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updatedAt', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
-
-// ---------- organization plugin (minimum viable: org + member + invitation) ----------
 
 export const organization = pgTable('organization', {
   id: uuid('id').primaryKey().defaultRandom(),

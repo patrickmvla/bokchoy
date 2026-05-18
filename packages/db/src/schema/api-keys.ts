@@ -1,26 +1,4 @@
-// SDK API key primitive per [[wallet-http-contract]] G3 (auth-surface) + slice 8.1a.
-//
-// Bearer-token machine-to-machine auth surface for the SDK customers (game
-// servers calling /v1/wallets/.../credit and similar). Distinct from Better Auth
-// (which handles human cockpit + player auth per [[backend-stack]] §6/§7). Lives
-// in its own schema file because Better Auth's `auth.ts` is the auto-generated
-// mirror of Better Auth's expected shape per [[backend-stack]] §6.5; api_keys is
-// BokChoy-original and independent of Better Auth's lifecycle.
-//
-// Key format: `bk_<env>_<32-hex-chars>` — `bk_live_...` for production, `bk_test_...`
-// for development (Stripe-pattern env-prefix). The first 12 chars (`bk_<env>_<8-hex>`)
-// form `key_prefix` (UNIQUE, indexed for O(log n) lookup); the remaining hex is the
-// secret half, HMAC-SHA-256'd into `key_hash` (never plaintext). Bearer middleware
-// looks up by prefix, constant-time compares HMAC of the supplied secret.
-//
-// Globally-UNIQUE key_prefix (not scoped to project_id) — defense in depth: prevents
-// the failure mode where a colliding prefix between projects resolves to the wrong
-// tenant's key row.
-//
-// RLS + FORCE RLS land via the migration hand-append per [[multi-tenant-rls-research]]
-// canonical pattern (drizzle-kit doesn't emit FORCE per [[drizzle-orm-research]] (1)).
-// bokchoy_app GRANT SELECT/INSERT/UPDATE — DELETE intentionally omitted: revocation
-// is via revoked_at column, never via row-delete (preserves audit trail).
+/** SDK Bearer-token table. Key format `bk_<env>_<32hex>`; key_prefix UNIQUE globally (defense vs cross-tenant collision). */
 
 import { sql } from 'drizzle-orm';
 import {
@@ -35,8 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { projects, TENANT_GUC } from './tenancy';
 
-// Drizzle's pg-core lacks a built-in BYTEA type. customType is the canonical
-// Drizzle pattern for Postgres types not in the core surface.
+// pg-core lacks bytea — customType is Drizzle's canonical fill-in.
 const bytea = customType<{ data: Buffer; default: false }>({
   dataType() {
     return 'bytea';

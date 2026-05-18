@@ -1,27 +1,16 @@
-// BCxxx error classification per [[wallet-mechanics]] Amendment Part 1 A5 +
-// Part 3 A18, mapped from Postgres SQLSTATE raised by the M1 stored functions
-// per [[wrapper-shape]].
-//
-// BC001/BC002 are HTTP-middleware-raised (slice 4.6); listed here so the
-// HTTP layer's switch on `code` is exhaustive across the BC namespace.
-// BC030/BC050/BC060 are reserved; BC050 is active via 23503 translation in
-// sqlstate-to-error.ts (constraint `transactions_project_reason_code_fk`).
-// BC060 is active per slice M-1.5 (wallet_credit_by_external_id raises it
-// directly when the currencyCode is not registered for the project) per
-// [[wallet/credit-route-contract]] (i) — the handler catches BC060 and forms
-// the 404 + availableCodes response.
+/** BCxxx error classification. Per [[wallet-mechanics]] Part 1 A5 + Part 3 A18. */
 
 export type BcCode =
-  | 'BC001' // IdempotencyKeyInUse        — middleware (slice 4.6)
-  | 'BC002' // IdempotencyKeyMismatch     — middleware
-  | 'BC010' // InsufficientFunds           — wallet_debit
-  | 'BC020' // TenantMismatch              — all wallet wrappers
-  | 'BC021' // WalletNotFound              — wallet_credit / wallet_debit
-  | 'BC022' // CurrencyMismatch            — wallet_credit / wallet_debit
-  | 'BC030' // PolicyViolation             — reserved
-  | 'BC040' // ConfigurationError          — wallet_deidentify_player
-  | 'BC050' // ReasonCodeNotRegistered     — translated from PG 23503
-  | 'BC060'; // CurrencyNotFound           — reserved (translated from PG 23503)
+  | 'BC001' // IdempotencyKeyInUse
+  | 'BC002' // IdempotencyKeyMismatch
+  | 'BC010' // InsufficientFunds
+  | 'BC020' // TenantMismatch
+  | 'BC021' // WalletNotFound
+  | 'BC022' // CurrencyMismatch
+  | 'BC030' // PolicyViolation (reserved)
+  | 'BC040' // ConfigurationError
+  | 'BC050' // ReasonCodeNotRegistered (PG 23503 translation)
+  | 'BC060'; // CurrencyNotFound
 
 export type ErrorDetails =
   | { code: 'BC001' }

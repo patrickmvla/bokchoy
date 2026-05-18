@@ -1,27 +1,3 @@
-// OAuth-primary sign-in form per [[cockpit-stack-integration-research]] F7 +
-// [[cockpit/first-run-journey]] step 1.
-//
-// Structure (top → bottom): OAuth buttons (Google + GitHub) primary, email/
-// password fallback secondary. Per design pick (iii) 2026-05-11 +
-// [[cockpit/auth-surface-mount]] (P) OAuth provider config.
-//
-// OAuth path: authClient.signIn.social({provider, callbackURL: '/projects'}).
-// Better Auth redirects to the provider, callbacks to /api/auth/callback/{provider}
-// (Vercel-rewrite proxied to backend, slice 8.3.0 mount), then to callbackURL.
-// First-run accounts auto-create on OAuth callback per [[cockpit/first-run-journey]]
-// step 3 + (O1) auto-create-org pick. Subsequent sign-ins resolve the existing
-// account.
-//
-// Email/password path: authClient.signIn.email({email, password}). Better Auth
-// validates server-side, sets cookie on response, returns {data, error}. Caller
-// branches on `error`. Sign-up flow (account creation via email/password) is
-// NOT in this slice — first-time email/password users would need a separate
-// /sign-up page. For MVP the OAuth path provisions accounts on first call;
-// /sign-up flagged as future slice.
-//
-// shadcn Field + RHF Controller per [[cockpit/shadcn-setup]] Amendment 2026-05-12
-// + memory [[feedback-shadcn-form-field-pattern]]. <Form> wrapper deprecated.
-
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -64,18 +40,15 @@ export function SignInForm() {
   async function handleOAuth(provider: 'google' | 'github') {
     setOauthPending(provider);
     try {
+      // Inline-return error surfaces provider misconfig / trustedOrigins mismatch; success path browser-redirects.
       const result = await authClient.signIn.social({
         provider,
         callbackURL: CALLBACK_URL,
       });
-      // Better Auth's social signIn typically initiates a browser redirect
-      // server-side; if it returns inline with an error (provider not
-      // configured, trustedOrigins mismatch), surface it as a toast.
       if (result?.error) {
         toast.error(userMessage(result.error));
         setOauthPending(null);
       }
-      // Success path: browser is redirecting; no further action.
     } catch (err) {
       toast.error(userMessage(err));
       setOauthPending(null);
@@ -94,9 +67,7 @@ export function SignInForm() {
         setEmailPending(false);
         return;
       }
-      // Success: navigate and stay pending — the form will unmount when
-      // the next route renders. Releasing pending here would flicker the
-      // button label back to "Sign in" mid-navigation.
+      // Stay pending — releasing would flicker the button label mid-navigation as the form unmounts.
       router.push(CALLBACK_URL);
     } catch (err) {
       // Network failure or unexpected throw — Better Auth's client usually

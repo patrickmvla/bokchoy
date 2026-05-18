@@ -1,22 +1,4 @@
-// Bearer-validation middleware per [[wallet-http-contract]] G3 + slice 8.1a.
-//
-// Key format: bk_<env>_<32-hex-chars> (40 chars total).
-//   - bk_live_... for production keys
-//   - bk_test_... for development keys
-// First 12 chars (bk_<env>_<4-hex>) form key_prefix (UNIQUE indexed).
-// HMAC-SHA-256(full_key, BOKCHOY_API_KEY_HMAC_SECRET) is stored as key_hash.
-//
-// Lookup uses SECURITY DEFINER api_key_lookup(p_prefix) per migration 0008
-// because api_keys is FORCE RLS-protected and the bootstrap lookup runs before
-// the tenant GUC is set. Function bypasses RLS as OWNER postgres.
-//
-// HMAC keying via BOKCHOY_API_KEY_HMAC_SECRET env var: a DB leak alone does
-// NOT validate keys — attacker also needs the server-side HMAC secret.
-// Constant-time compare via node:crypto.timingSafeEqual avoids timing-channel
-// leak of the HMAC bytes.
-//
-// Cross-runtime discipline per [[backend-stack]] line 27: node:crypto, NOT
-// Bun.password / Bun-specific crypto.
+/** Bearer middleware. SECURITY DEFINER lookup bypasses RLS at the bootstrap (no tenant GUC set yet). */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { sql } from 'drizzle-orm';
@@ -84,7 +66,6 @@ export const apiKeyMiddleware = createMiddleware<ApiKeyContext>(async (c, next) 
 
   const expected = Buffer.from(row.key_hash);
   const supplied = hmacKey(fullKey);
-  // timingSafeEqual requires equal length; both are SHA-256 = 32 bytes.
   if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
     return c.json(unauthorized('Invalid key'), 401);
   }
@@ -92,9 +73,7 @@ export const apiKeyMiddleware = createMiddleware<ApiKeyContext>(async (c, next) 
   c.set('projectId', row.project_id);
   c.set('apiKeyId', row.id);
 
-  // Fire-and-forget last_used_at update — only on validated keys (preserves
-  // audit semantics: last_used_at means last *successful* use, not last
-  // attempt). Logged on failure so silent telemetry drops are visible.
+  // Fire-and-forget — last_used_at means last *successful* use, not last attempt.
   void db
     .execute(sql`SELECT api_key_record_use(${row.id}::uuid)`)
     .catch((err: unknown) => console.error('api_key_record_use failed', err));

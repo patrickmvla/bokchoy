@@ -1,22 +1,4 @@
-// OAuth provider brand icons inlined as SVG components.
-//
-// Lucide-react (the cockpit's icon dep) intentionally excludes trademarked
-// brand marks per their library policy. Both icons come from the official
-// brand-guideline pages and are widely-inlined across the B2B SaaS sign-in
-// ecosystem.
-//
-//   - Google "G" multi-color mark: per Google brand guidelines at
-//     developers.google.com/identity/branding-guidelines. Four-color paths
-//     (#4285F4 blue, #34A853 green, #FBBC05 yellow, #EA4335 red).
-//   - GitHub Octocat: per github.com/logos. Monochrome `currentColor` —
-//     adapts to button text color (works in light + dark themes).
-//
-// Note on strict Google compliance: Google's branding guidelines technically
-// prescribe a specific "Sign in with Google" widget (white/dark variants
-// with prescribed padding). The inline-icon-on-our-own-button approach is
-// what most B2B SaaS ships; Google enforces strict compliance only on
-// large-scale apps. Promote to the official widget if compliance review
-// flags it post-launch.
+/** Inline OAuth brand icons — Lucide excludes trademarks. From developers.google.com/identity/branding-guidelines + github.com/logos. */
 
 import type { SVGProps } from 'react';
 

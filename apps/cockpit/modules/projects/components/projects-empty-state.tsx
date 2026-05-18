@@ -1,13 +1,3 @@
-// Projects empty state per [[cockpit/first-run-journey]] step 4.
-//
-// Shown when GET /v1/projects returns `[]` (new organization, no projects
-// created yet). Prompts the operator to create their first project via a CTA
-// linking to /projects/new — entry point for the form scaffold in
-// modules/projects/components/create-project-form.tsx.
-//
-// Pattern: shadcn <Empty> primitive composition. EmptyMedia + EmptyTitle +
-// EmptyDescription + EmptyContent (CTA button).
-
 import { FolderPlusIcon } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';

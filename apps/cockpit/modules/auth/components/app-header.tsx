@@ -1,19 +1,3 @@
-// Cockpit chrome header: org name + user email + sign-out.
-//
-// Renders inside the (app)/ auth-gated layout. The signed-in user comes
-// down as a prop from the layout (which already called getSession for the
-// auth gate — no point re-fetching client-side). The org info comes from
-// useOrgMe (TanStack Query — cached 5min, refetched on mount).
-//
-// Sign-out: authClient.signOut() clears the session cookie + drops the
-// query cache (so a fresh sign-in doesn't show stale data), then
-// router.push('/sign-in'). On failure, surface via userMessage().
-//
-// Design: minimal top bar — left side shows org name (or spinner during
-// initial load); right side shows user email + sign-out button. Keep the
-// chrome unobtrusive; the cockpit's main content is what the operator is
-// here for.
-
 'use client';
 
 import { useQueryClient } from '@tanstack/react-query';

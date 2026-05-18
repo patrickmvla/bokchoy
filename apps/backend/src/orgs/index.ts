@@ -1,16 +1,4 @@
-// Orgs module per [[backend-service-shape]] §2 + [[cockpit/admin-list-endpoints-contract]].
-// Single endpoint at slice 8.3:
-//
-//   GET /v1/orgs/me — active organization + member context for the
-//                     authenticated user
-//
-// adminGate already resolved + set c.var['admin.org'] and c.var['admin.member']
-// during the 5-step gate chain (Step 4b for org, Step 4 for member). The
-// handler is a thin response shaper — no extra DB hit needed, the rows are
-// in request-local context.
-//
-// Future org endpoints (settings update, invitation list, member CRUD UI,
-// etc.) land in this module as siblings to getOrgMeHandler.
+/** GET /v1/orgs/me. Thin response shaper — adminGate populated c.var['admin.org'] + ['admin.member']. */
 
 import { trace } from '@opentelemetry/api';
 import type { Context, Hono } from 'hono';
@@ -20,19 +8,9 @@ import type { IdempotencyContext } from '../idempotency';
 
 const tracer = trace.getTracer('@bokchoy/orgs');
 
-// Match apps/backend/src/index.ts AppContext shape (superset of what the
-// orgs routes actually need). Hono generic invariance — mount function
-// signature must accept the parent app's exact union, not a subset.
-// ApiKeyContext + IdempotencyContext are unused by this handler but
-// included for the type match. Same pattern as mountProjectsRoutes +
-// mountWalletRoutes.
+// Superset of AppContext — Hono generic invariance forces the parent app's exact union on `mount`.
 type OrgsAppContext = ApiKeyContext & IdempotencyContext & AdminContext;
 
-// Response shape per [[cockpit/admin-list-endpoints-contract]] GET /v1/orgs/me.
-// Bare data per (R2). Excludes the org's `logo` / `metadata` / `updatedAt`
-// fields — the contract names only id/name/slug/createdAt + nested member.
-// Cockpit chrome consumes name + slug + role; logo + metadata are out of
-// MVP scope (no settings UI yet).
 async function getOrgMeHandler(c: Context<AdminContext, '/v1/orgs/me'>) {
   const org = c.var['admin.org'];
   const member = c.var['admin.member'];

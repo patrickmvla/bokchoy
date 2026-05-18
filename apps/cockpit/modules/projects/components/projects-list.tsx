@@ -1,16 +1,3 @@
-// Projects list view per [[cockpit/first-run-journey]] step 4 +
-// [[cockpit/admin-list-endpoints-contract]] GET /v1/projects.
-//
-// Client Component that fetches via TanStack Query (use-projects hook) and
-// branches between empty state and a Card grid. Per [[cockpit-stack-integration-research]]
-// F6.11 + the auth-gate-pending caveat: switching to RSC fetching is owed
-// when slice 8.3.2 lands.
-//
-// Card design: clickable card → /projects/{id} (project detail page lands
-// in slice 8.4 next-cut). For now the link is rendered but the target page
-// doesn't exist — operators land on Next.js's 404 if they click. Acceptable
-// for slice 8.4 first cut; the list page itself works.
-
 'use client';
 
 import { ArrowUpRightIcon, FolderIcon } from 'lucide-react';

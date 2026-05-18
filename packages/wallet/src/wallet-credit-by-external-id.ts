@@ -1,17 +1,4 @@
-// walletCreditByExternalId wrapper per [[wallet/credit-route-contract]] (iii) +
-// [[wrapper-shape]] D2-α params-object signature.
-//
-// Calls wallet_credit_by_external_id (SQL function from 0010 migration) which:
-//   (a) resolves currency code → id, raising BC060 (CurrencyNotFound) if absent,
-//   (b) lazy-creates the player row via INSERT...ON CONFLICT DO NOTHING,
-//   (c) lazy-creates the wallet row via INSERT...ON CONFLICT DO NOTHING,
-//   (d) delegates to wallet_credit (FOR UPDATE + idempotency-replay path), and
-//   (e) returns TABLE(transaction_id, wallet_id, player_id, balance_after).
-//
-// Return shape matches the response contract's flat four-field shape per
-// [[wallet/credit-route-contract]] (i). balanceAfter is kept as the postgres-js
-// string form of NUMERIC(20,4) to preserve precision past 2^53; the wrapper
-// stays out of float conversion.
+/** SQL function: resolves currency → BC060 if absent, lazy-creates player+wallet, delegates to wallet_credit. */
 
 import type { Db, Tx } from '@bokchoy/db';
 import { sql } from 'drizzle-orm';

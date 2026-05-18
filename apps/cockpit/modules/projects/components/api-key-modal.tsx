@@ -1,21 +1,4 @@
-// Visible-once API-key modal per [[cockpit/first-run-journey]] step 7 + K1.
-//
-// Pattern: shadcn <Dialog> primitive. Displays the plaintext apiKey ONCE with
-// a copy button + prominent warning. Dismiss → navigate to /projects (or to
-// the project detail page when slice 8.4 ships /projects/{id}). K1 visible-once
-// matches [[wallet-http-contract]] slice 8.1a HMAC-stored key model — the
-// plaintext lives only in the response → React state → this modal; never
-// persisted client-side beyond the modal's lifetime.
-//
-// Copy UX: navigator.clipboard.writeText() with sonner toast on success.
-// Fallback for clipboard-API-blocked contexts (per [[cockpit/first-run-journey]]
-// *Mitigations*): the key is still rendered as selectable text so the operator
-// can hand-select + copy manually. The toast surfaces both success and failure
-// states so the operator knows whether the clipboard call worked.
-//
-// Modal is controlled (open / onOpenChange via props). Parent owns the
-// open/closed state — typical pattern when the modal is triggered by an
-// async operation (form submission) rather than a user gesture.
+/** Visible-once API key modal. Per [[cockpit/first-run-journey]] step 7 K1 — never persists plaintext client-side. */
 
 'use client';
 
@@ -33,16 +16,11 @@ import {
 } from '@/components/ui/dialog';
 
 interface ApiKeyModalProps {
-  /** Whether the modal is visible. Parent owns this state. */
   open: boolean;
-  /** Fires when the user dismisses the modal (X button, ESC, backdrop click,
-   * or the "I've saved it" confirm button). Parent should navigate after. */
+  /** Parent should navigate after dismiss. */
   onDismiss: () => void;
-  /** Plaintext API key — shown ONCE. Parent passes null when no key is
-   * available; modal renders nothing in that state. */
+  /** Plaintext key — null hides the modal entirely. */
   apiKey: string | null;
-  /** Human-readable label for the key, displayed above the value. Defaults
-   * to "Your API key". */
   label?: string;
 }
 
@@ -64,8 +42,6 @@ export function ApiKeyModal({
       await navigator.clipboard.writeText(apiKey);
       setCopied(true);
       toast.success('Copied to clipboard');
-      // Reset the "copied" indicator after 2s so the operator can copy again
-      // if needed (clipboard contents may be overwritten by other apps).
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error(

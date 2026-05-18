@@ -1,19 +1,4 @@
-// Static syntax-highlighted code block for marketing surfaces per
-// [[marketing/v1-shape]] (iii) + (v) production-grade gate: shiki at build
-// time, no client-side highlighter. Marketing pages are heavy-traffic + SEO-
-// adjacent; keeping the route bundle thin matters.
-//
-// Server Component — async render via shiki's codeToHtml. shiki internally
-// memoises highlighters per (theme, lang) combo so repeated <CodeBlock />
-// renders on the same page don't re-initialise. dangerouslySetInnerHTML is
-// safe here because the input is hardcoded TS strings authored in this repo,
-// NOT user-supplied content; XSS surface is zero.
-//
-// Theme choice: single dark theme ('github-dark') even when next-themes
-// flips the cockpit chrome to light. Production-cited: Stripe, Resend, and
-// shadcn's own marketing site render dark code blocks regardless of page
-// theme. Reads as a code-editor convention rather than a chrome-theme
-// inconsistency. Dual-theme support is a CSS-variable polish, deferrable.
+/** Server Component: shiki build-time syntax highlighting. dangerouslySetInnerHTML safe — hardcoded TS strings, no user input. */
 
 import { codeToHtml } from 'shiki';
 import { cn } from '@/lib/utils';

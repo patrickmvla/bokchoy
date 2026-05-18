@@ -1,25 +1,10 @@
-// POST /v1/projects/{projectId}/api-keys fetch wrapper.
-//
-// Idempotency-Key per [[cockpit/admin-list-endpoints-contract]] (E2) + the
-// idempotencyMiddleware on the backend route (slice 8.1b). Key derivation per
-// the contract: `cockpit-first-key-${projectId}` — projectId-scoped so the
-// retry on a transient failure returns the SAME api_key row from the
-// idempotency-keys store rather than minting a second key.
-//
-// The plaintext apiKey returned here is shown ONCE in the visible-once modal
-// per [[cockpit/first-run-journey]] step 7 + K1 (HMAC stored backend-side per
-// slice 8.1a). Cockpit MUST NOT persist the plaintext anywhere except in
-// React state for the modal's lifetime.
-
 import type { ApiError, CreateApiKeyResponse } from '../types';
 import { ProjectApiError } from './create-project';
 
 export interface CreateApiKeyInput {
   projectId: string;
   name: string;
-  /** Optional idempotency key — defaults to `cockpit-first-key-${projectId}`
-   * per [[cockpit/admin-list-endpoints-contract]]. Override for subsequent
-   * keys on the same project. */
+  /** Defaults to `cockpit-first-key-${projectId}`. Override for additional keys on the same project. */
   idempotencyKey?: string;
 }
 

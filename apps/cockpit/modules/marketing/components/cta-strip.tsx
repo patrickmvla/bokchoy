@@ -1,14 +1,3 @@
-// Final CTA strip per [[marketing/v1-shape]] (v) section 4. Primary action:
-// "Start free" → /sign-up. Secondary action: "Read the docs" → /docs.
-// Mirrors the hero CTA pair so a visitor who scrolled past the hero gets
-// a second conversion point near the page bottom.
-//
-// Server Component; CTAs use the `<Button asChild><Link/></Button>` Slot
-// composition (no 'use client' leakage).
-//
-// Copy placeholder: vault sketch text. The actual final marketing copy
-// lands in a separate authoring session.
-
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 

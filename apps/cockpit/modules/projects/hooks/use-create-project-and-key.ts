@@ -1,28 +1,3 @@
-// TanStack Query mutation chaining POST /v1/projects → POST /v1/projects/{id}/api-keys.
-//
-// (E2) split-POST per [[cockpit/admin-list-endpoints-contract]] — one mutation
-// from the form's perspective, two sequential network calls under the hood.
-// The hook surfaces a single loading state + a unified success payload
-// `{ project, apiKey, apiKeyRecord }` so the form can transition cleanly to
-// the visible-once modal per [[cockpit/first-run-journey]] step 7 once both
-// succeed.
-//
-// Failure modes:
-//   - Step 1 fails (POST /v1/projects) — error surfaces directly via normal
-//     mutation error path; no project created, no api_key created. Form
-//     re-enables for retry with the same name+slug.
-//   - Step 2 fails (POST /v1/projects/{id}/api-keys) — project exists but no
-//     key. Mutation throws `ProjectCreatedButKeyFailedError` carrying the
-//     orphaned `projectId` so the form can transition to a retry-key state
-//     (calling step 2 alone with the same Idempotency-Key
-//     `cockpit-first-key-${projectId}` — idempotencyMiddleware will replay
-//     the cached response if step 2 actually committed but the cockpit
-//     missed the response; otherwise the handler runs fresh).
-//
-// Without this carve-out, a step-2 failure → form's onError toasts the error
-// → user retries the form with same name+slug → step 1 returns 409
-// PROJECT_SLUG_EXISTS → user is stuck. The retry-key path closes that loop.
-
 'use client';
 
 import { useMutation } from '@tanstack/react-query';
@@ -38,9 +13,8 @@ interface CreateProjectAndKeyResult {
 }
 
 /**
- * Thrown when POST /v1/projects succeeded but POST /v1/projects/{id}/api-keys
- * failed. Carries the orphaned `projectId` + the just-created `project` row so
- * the form can offer a retry-key UI without losing the project context.
+ * Step 1 succeeded, step 2 failed. Form transitions to retry-key UI using `projectId` + same
+ * Idempotency-Key (`cockpit-first-key-${projectId}`) so the backend replays if step 2 actually committed.
  */
 export class ProjectCreatedButKeyFailedError extends Error {
   public readonly projectId: string;
@@ -56,6 +30,7 @@ export class ProjectCreatedButKeyFailedError extends Error {
   }
 }
 
+/** (E2) split-POST: POST /v1/projects → POST /v1/projects/{id}/api-keys, surfaced as one mutation. */
 export function useCreateProjectAndKey() {
   return useMutation<CreateProjectAndKeyResult, Error, CreateProjectInput>({
     mutationFn: async (input) => {

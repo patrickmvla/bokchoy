@@ -1,13 +1,3 @@
-// Sign-in route at bokchoy.com/sign-in per [[cockpit/first-run-journey]] step 1
-// + [[cockpit-stack-integration-research]] F7.
-//
-// OUTSIDE the (app)/ route group — no auth gate. Public-reachable by design:
-// unauthenticated users redirected from (app)/* land here.
-//
-// Server Component shell (no 'use client') — the interactive form lives in
-// the Client Component <SignInForm> which owns OAuth + email/password flows
-// via authClient from @/lib/auth-client.
-
 import Link from 'next/link';
 import { SignInForm } from '@/modules/auth/components/sign-in-form';
 

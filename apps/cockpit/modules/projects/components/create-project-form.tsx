@@ -1,30 +1,3 @@
-// Project-create form per [[cockpit/first-run-journey]] step 5 + 6 + 7:
-//   - Step 5: client-side validation (name 1-64, slug kebab-case)
-//   - Step 6: submit → POST /v1/projects → POST /v1/projects/{id}/api-keys
-//     chained via TanStack mutation in modules/projects/hooks/use-create-project-and-key.ts
-//     per (E2) split-POST in [[cockpit/admin-list-endpoints-contract]]
-//   - Step 7: on success, open visible-once <ApiKeyModal> with the plaintext
-//     key. K1 visible-once-on-creation per [[wallet-http-contract]] slice 8.1a
-//     HMAC-stored key model.
-//
-// Pattern: react-hook-form <Controller> + shadcn <Field> family per
-// [[cockpit/shadcn-setup]] Amendment 2026-05-12 (replaces the deprecated 2.x
-// <Form> wrapper). zodResolver bridges the schema to RHF.
-//
-// Slug auto-derivation: name → slug pre-fills until the user manually edits
-// the slug field. `autoSlug` boolean tracks intent — flipped to false on first
-// user-driven slug change, preserving manual edits across subsequent name typing.
-//
-// Modal dismiss → router.push('/projects') (list view; project-detail page
-// /projects/{id} ships in slice 8.4 next-cut per [[cockpit/first-run-journey]]
-// step 11 verify-loop).
-//
-// Step-2-failure recovery: if POST /v1/projects succeeds but POST /v1/projects/{id}/api-keys
-// fails, the chained mutation throws ProjectCreatedButKeyFailedError carrying
-// the orphaned project. The form switches to a retry-key state showing a
-// banner + a "Retry key creation" button that calls just step 2. Without this,
-// the user retries the form, hits 409 PROJECT_SLUG_EXISTS, and is stuck.
-
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -77,9 +50,6 @@ export function CreateProjectForm() {
       },
       onError: (error) => {
         if (error instanceof ProjectCreatedButKeyFailedError) {
-          // Step 1 (project) committed; step 2 (api_key) failed. Switch to
-          // retry-key UI rather than letting the user retry the whole form
-          // (which would hit 409 PROJECT_SLUG_EXISTS).
           setOrphanedProject(error.project);
           toast.error(
             "Project created, but the API key couldn't be issued. Retry below.",
@@ -118,8 +88,6 @@ export function CreateProjectForm() {
     router.push('/projects');
   }
 
-  // Retry-key state: project exists, no key yet. Hide the create-project form
-  // and show a recovery panel instead.
   if (orphanedProject) {
     return (
       <div className="rounded-md border border-destructive/30 bg-destructive/5 p-6">

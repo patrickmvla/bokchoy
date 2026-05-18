@@ -1,7 +1,4 @@
-// Infra module per [[backend-service-shape]] §2. DB connection (consumes
-// @bokchoy/db's createDbClient), withTenant transaction wrapper for RLS GUC
-// per [[backend-stack]] F1 + [[multi-tenant-rls-research]], telemetry plumbing,
-// audit-log helpers.
+/** @module Infra singletons — auth, db, error middleware. */
 
 export { auth } from './auth';
 export { client, db } from './db';

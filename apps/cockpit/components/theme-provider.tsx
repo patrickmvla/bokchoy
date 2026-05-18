@@ -1,13 +1,3 @@
-// Class-based dark mode via next-themes per [[cockpit/shadcn-setup]] +
-// [[cockpit/shadcn-setup-research]] F5. Structure verbatim from
-// shadcn-ui/ui templates/next-app/components/theme-provider.tsx HEAD 2026-05-12
-// (suppressHydrationWarning on <html> in app/layout.tsx is required — next-themes
-// flips the .dark class client-side; SSR-rendered HTML may not match until hydration).
-//
-// Bundled ThemeHotkey ("d" key toggles dark/light) ships canonical with typing-target
-// guards (contentEditable / INPUT / TEXTAREA / SELECT). Harmless for B2B cockpit
-// operators; remove if it ever collides with operator browser-extension shortcuts.
-
 'use client';
 
 import { ThemeProvider as NextThemesProvider, useTheme } from 'next-themes';
@@ -57,9 +47,7 @@ function ThemeHotkey() {
         return;
       }
 
-      // event.key can be undefined for synthetic keydown events fired by
-      // password managers / autofill / IME composition. Optional chain
-      // short-circuits to undefined which !== 'd', so we exit early.
+      // event.key can be undefined on synthetic keydowns (password managers / autofill / IME).
       if (event.key?.toLowerCase() !== 'd') {
         return;
       }

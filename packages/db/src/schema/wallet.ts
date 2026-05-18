@@ -1,35 +1,4 @@
-// Wallet primitive schemas.
-//
-// Per [[wallet-mechanics]] (Amendments 2026-05-04 Part 1+2+3):
-//   • currencies / wallets / reason_codes — [[economy-primitives-research]] F3 / F4 / F6
-//     (R3 per-project allowlist for reason codes per Part 3 A15).
-//   • idempotency_keys — [[idempotency-keys-schema-research]] F6
-//     (D11.1 JSONB request_params + D11.2 NULL-until-locked per Part 3 A14).
-//   • transactions — [[wallet-mechanics]] §3 + Part 2 A8 (player_id UUID) +
-//     Part 3 A16 (wallet_version BIGINT NOT NULL + composite FK on
-//     (project_id, reason_code) → reason_codes).
-//   • loot_rolls / iap_receipts — [[wallet-mechanics]] §5 + Part 2 A9
-//     (player_id UUID).
-//   • staged_jobs — [[wallet-mechanics]] §4 + Part 3 A17
-//     ('idempotency_reaper' kind added to CHECK).
-//
-// Column names follow the Postgres-side spec (snake_case); JS properties are
-// camelCase per Drizzle convention.
-//
-// EXPLICITLY OUT OF THIS SLICE (each is its own follow-up cascade obligation):
-//   • PARTITION BY RANGE (created_at) on transactions / loot_rolls / iap_receipts
-//     per [[wallet-mechanics]] §3 + §7 — drizzle-kit doesn't emit declarative
-//     partitions; lands in a hand-edited follow-on migration with pg_partman.
-//   • RLS policies + FORCE ROW LEVEL SECURITY per [[wallet-mechanics]] §8 —
-//     separate migration once tables exist.
-//   • M1 stored functions (wallet_credit / wallet_debit / inventory_grant /
-//     inventory_consume / wallet_deidentify_player) per Part 1 A1 SECURITY
-//     INVOKER + Part 1 A2 FOR UPDATE + Part 1 A5 BCxxx SQLSTATE.
-//   • Bootstrap 12 system reason_codes on project creation (Part 3 A17 mechanism
-//     pick deferred — function vs trigger vs app-side hook).
-//   • Hourly idempotency_keys reaper via staged_jobs (kind='idempotency_reaper').
-//   • CI lint scripts/check-direct-wallet-mutation.ts per Part 1 A1.
-//   • SDK auto-key `bokchoy-sdk-retry-${uuid4()}` per Part 3 A17.
+/** Wallet primitive schemas. Per [[wallet-mechanics]]. RLS policies + partitioning ship in follow-on migrations. */
 
 import { sql } from 'drizzle-orm';
 import {
@@ -53,10 +22,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { players, projects, TENANT_GUC } from './tenancy';
 
-// ---------- currencies ----------
-// Per-project virtual currency definitions per [[economy-primitives-research]] F3.
-// `decimals` is for display/SDK serialization; on-chain storage is unconditionally
-// NUMERIC(20,4) on transactions.amount + wallets.balance.
+/** `decimals` is display/SDK-side only — on-chain storage is unconditionally NUMERIC(20,4). */
 export const currencies = pgTable(
   'currencies',
   {
@@ -87,9 +53,7 @@ export const currencies = pgTable(
   ],
 ).enableRLS();
 
-// ---------- wallets ----------
-// Pgledger row-per-(project, player, currency) pattern per
-// [[economy-primitives-research]] F4.
+/** Row-per-(project, player, currency) per pgledger pattern. */
 export const wallets = pgTable(
   'wallets',
   {
@@ -123,11 +87,7 @@ export const wallets = pgTable(
   ],
 ).enableRLS();
 
-// ---------- reason_codes ----------
-// Per-project allowlist (R3 — Part 3 A15) per [[economy-primitives-research]] F6.
-// Composite PK (project_id, code) is the FK target referenced by transactions.
-// Bootstrap default-set (8 faucets + 4 drains, all is_system=TRUE) lands via the
-// project-creation hook — explicitly NOT in this schema slice.
+/** Per-project reason-code allowlist. Composite PK (project_id, code) is the FK target on transactions. */
 export const reasonCodes = pgTable(
   'reason_codes',
   {
@@ -156,15 +116,7 @@ export const reasonCodes = pgTable(
   ],
 ).enableRLS();
 
-// ---------- idempotency_keys ----------
-// Brandur-shape with BokChoy adaptations per [[idempotency-keys-schema-research]] F6:
-//   • UNIQUE(project_id, idempotency_key) — replaces Brandur's user_id.
-//   • 255-char cap — Stripe-match per [[idempotency-strategy]].
-//   • request_params JSONB (D11.1 — JSONB over body-hash, Part 3 A14).
-//   • locked_at NULL-until-locked + completed_at NOT NULL when terminal
-//     (D11.2 — Part 3 A14). State derivable from columns alone (D2-α drops
-//     Brandur's recovery_point).
-//   • Reaper runs hourly on (created_at) WHERE completed_at IS NOT NULL — 24h TTL.
+/** Brandur-shape: NULL-until-locked + completed_at terminal. 255-char cap (Stripe-match). 24h reaper TTL. */
 export const idempotencyKeys = pgTable(
   'idempotency_keys',
   {
@@ -195,19 +147,7 @@ export const idempotencyKeys = pgTable(
   ],
 ).enableRLS();
 
-// ---------- transactions ----------
-// Unified audit log per [[wallet-mechanics]] §3 with cascades:
-//   • player_id UUID per Part 2 A8.
-//   • wallet_id / currency_id UUID (FK to UUID-keyed wallets / currencies).
-//   • wallet_version BIGINT NOT NULL per Part 3 A16 — server-populated from
-//     wallets.version inside wallet_credit/wallet_debit; pgledger forensic-version
-//     pattern.
-//   • Composite FK (project_id, reason_code) → reason_codes(project_id, code)
-//     per Part 3 A16 — write-time spelling-drift defense.
-//
-// PK is (id, created_at) — composite so PARTITION BY RANGE (created_at) is
-// addable without a PK rewrite. The PARTITION BY clause itself lands in the
-// follow-on migration; this table ships unpartitioned in 0001.
+/** Audit log. Composite PK (id, created_at) so PARTITION BY RANGE(created_at) is addable without PK rewrite. */
 export const transactions = pgTable(
   'transactions',
   {
@@ -270,14 +210,7 @@ export const transactions = pgTable(
   ],
 ).enableRLS();
 
-// ---------- loot_rolls ----------
-// Sister table per [[wallet-mechanics]] §5 + Part 2 A9 (player_id UUID).
-// pre_state / post_state are customer-opaque per [[pity-engine-scope]].
-// seed_inputs carries player_id at 16-byte UUID width per [[loot-rng-construction]]
-// canonical-form amendment (cascade obligation Part 2 A12 — applies when the
-// loot-roll engine itself ships; the schema column shape is fixed here).
-//
-// banner_id has no FK target in this slice (banners table is a Month 2 deliverable).
+// banner_id has no FK target — banners table is a Month 2 deliverable.
 export const lootRolls = pgTable(
   'loot_rolls',
   {
@@ -319,9 +252,7 @@ export const lootRolls = pgTable(
   ],
 ).enableRLS();
 
-// ---------- iap_receipts ----------
-// Sister table per [[wallet-mechanics]] §5 + Part 2 A9 (player_id UUID).
-// raw_receipt is NULL'd by wallet_deidentify_player on account close.
+/** raw_receipt is NULL'd by wallet_deidentify_player on account close. */
 export const iapReceipts = pgTable(
   'iap_receipts',
   {
@@ -355,10 +286,7 @@ export const iapReceipts = pgTable(
   ],
 ).enableRLS();
 
-// ---------- staged_jobs ----------
-// Outbox per [[wallet-mechanics]] §4 + Part 3 A17 (kind 'idempotency_reaper').
-// Worker claim pattern (SELECT … FOR UPDATE SKIP LOCKED) lives in the worker
-// implementation, not in the schema.
+/** Outbox. Worker claim (SELECT…FOR UPDATE SKIP LOCKED) lives in the worker, not the schema. */
 export const stagedJobs = pgTable(
   'staged_jobs',
   {

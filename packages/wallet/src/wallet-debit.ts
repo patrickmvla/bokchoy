@@ -1,6 +1,4 @@
-// walletDebit wrapper per [[wrapper-shape]]. The SQL function stores
-// transactions.amount as -amount per [[wallet-mechanics]] §3 ("positive for
-// credit, negative for debit"); callers pass amount positive.
+/** SQL function stores amount as negative; callers pass amount positive. */
 
 import type { Db, Tx } from '@bokchoy/db';
 import { sql } from 'drizzle-orm';
@@ -20,7 +18,6 @@ export interface WalletDebitParams {
 }
 
 export async function walletDebit(db: Db | Tx, params: WalletDebitParams): Promise<number> {
-  // TODO(otel): wrap with span per [[wallet-mechanics]] Amendment Part 1 A3 layer 1.
   try {
     const rows = await db.execute(sql`
       SELECT wallet_debit(

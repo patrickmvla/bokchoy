@@ -1,24 +1,3 @@
-// Project detail Client Component per [[cockpit/first-run-journey]] step 11
-// (T2 verify-key polling) + [[cockpit/admin-list-endpoints-contract]] (A1).
-//
-// Owns the TanStack Query polling loop via use-project. While no api_key has a
-// non-null lastUsedAt, the verify-key panel shows "Waiting for first SDK
-// call…"; once lastUsedAt is observed, the panel flips to "Key verified" and
-// polling stops (refetchInterval returns false). The first-run-journey
-// mitigation for indefinite polling (5-minute timeout) is deferred — a
-// page-level "Still waiting?" hint can land later without touching the query.
-//
-// The post-step-7 visible-once API-key modal is NOT mounted here — it's owned
-// by the create-project-form per [[cockpit/first-run-journey]] step 7; this
-// page is the redirect target AFTER the modal is dismissed (step 8). The
-// detail page never sees the plaintext key.
-//
-// The SDK-install code snippet from step 8 is NOT shown yet — the
-// @bokchoy/sdk package is unpublished per the [[cockpit/first-run-journey]]
-// open thread. When the SDK ships, add the snippet inside <VerifyKeyPanel>'s
-// waiting state. For slice 8.4 next-cut, the verify panel just shows status
-// + relative-time updates.
-
 'use client';
 
 import {
@@ -244,16 +223,7 @@ function ApiKeyRow({
   );
 }
 
-// Confirm-and-revoke dialog. Inlined here rather than its own file because
-// it's tightly coupled to ApiKeyRow's state — extract only if a second
-// consumer surfaces.
-//
-// Error surfacing: ProjectApiError carries `.code` + `.status`. 422
-// ALREADY_REVOKED is treated as a benign-race success (the row is already in
-// the desired state; just refetch) — the cockpit invalidates the project
-// query and dismisses the dialog without an error toast. 404 + 5xx + network
-// errors surface as destructive toasts so the operator knows the revoke
-// didn't land.
+// ALREADY_REVOKED is a benign race — dismiss without toast.
 function RevokeApiKeyDialog({
   open,
   onOpenChange,
@@ -280,10 +250,6 @@ function RevokeApiKeyDialog({
             error instanceof ProjectApiError &&
             error.code === 'ALREADY_REVOKED'
           ) {
-            // Benign race — the row is already revoked on the backend.
-            // Detail view will reflect that on the next refetch (the hook's
-            // onSuccess invalidates the query on the success path; we
-            // invalidate manually here to mirror that state).
             toast.message('Key was already revoked.');
             onOpenChange(false);
             return;
@@ -336,11 +302,7 @@ function RevokeApiKeyDialog({
   );
 }
 
-// Inline relative-time helper. Intl.RelativeTimeFormat is the canonical
-// browser-native API but its single-unit output ("3 hours ago") rounds
-// aggressively for the verify-loop's sub-minute granularity. Hand-rolled
-// here keeps the "Just now" / seconds-level fidelity that step 11's verify
-// signal ("last used N seconds ago") demands.
+// Intl.RelativeTimeFormat rounds aggressively; verify-loop needs sub-minute fidelity.
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime();
   const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));

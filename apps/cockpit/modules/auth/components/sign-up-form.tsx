@@ -1,26 +1,3 @@
-// Sign-up form per [[cockpit-stack-integration-research]] F7 + corollary to
-// the existing sign-in flow.
-//
-// OAuth path is identical to sign-in — Better Auth's signIn.social
-// auto-provisions on first OAuth callback per [[cockpit/first-run-journey]]
-// step 3 + (O1). The cockpit doesn't need a separate "OAuth sign-up"
-// endpoint; the same buttons work for both new and returning users.
-//
-// Email/password path: authClient.signUp.email({email, password, name}).
-// Better Auth creates the user row, sets the session cookie on the
-// response, and returns {data, error}. On success we navigate to
-// /projects same as sign-in — Better Auth's emailAndPassword.enabled
-// defaults log the user in immediately.
-//
-// shadcn Field + RHF Controller pattern matches sign-in-form. Password
-// show/hide toggle inlined (copy from sign-in); extract to a shared
-// <PasswordInput> on third use (settings password-change slice).
-//
-// NOTE: this slice does NOT implement email verification — Better Auth's
-// emailAndPassword.requireEmailVerification defaults to false; new users
-// can sign in immediately. Owed for production: enable verification + ship
-// a /verify-email surface. Tracked as a follow-on slice.
-
 'use client';
 
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -71,7 +48,6 @@ export function SignUpForm() {
         toast.error(userMessage(result.error));
         setOauthPending(null);
       }
-      // Success: browser is redirecting to the OAuth provider.
     } catch (err) {
       toast.error(userMessage(err));
       setOauthPending(null);

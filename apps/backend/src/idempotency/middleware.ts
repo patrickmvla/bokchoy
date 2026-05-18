@@ -1,30 +1,4 @@
-// Idempotency-Key middleware per [[wallet-http-contract]] G4 +
-// [[idempotency-strategy]] D2-α.
-//
-// CONTRACT (verbatim from [[wallet-http-contract]] 8.1b item 3):
-//   • Header `Idempotency-Key`, ≤255 chars ASCII (RFC 8941 Structured Header
-//     String — printable ASCII 0x21-0x7E).
-//   • Server-derived natural-key path stays primary. Middleware writes to
-//     idempotency_keys ONLY when the header is supplied.
-//   • Lookup by (project_id, idempotency_key) UNIQUE.
-//   • State machine:
-//     - row absent → INSERT with locked_at = now(); call next; UPDATE
-//       response_status + response_body + completed_at on completion.
-//     - row found + completed_at set + body_hash matches → REPLAY (return
-//       cached response_status + response_body, handler not invoked).
-//     - row found + locked_at recent + completed_at NULL + body_hash matches
-//       → 409 BC001 IdempotencyKeyInUse (concurrent in-flight).
-//     - row found + body_hash mismatches → 422 BC002 IdempotencyKeyMismatch.
-//   • Lock timeout: 30s. Older lock = recoverable; re-lock + proceed.
-//
-// Body fingerprint: SHA-256 of raw body bytes (NOT canonical JSON — defers per
-// contract "defer canonicalization-algorithm pick to slice 8.1b
-// implementation"). Trade: clients must produce byte-identical bodies on retry
-// (matches Stripe documented behavior).
-//
-// All idempotency_keys reads/writes wrapped in withTenant — RLS scopes by
-// project_id. Bearer middleware MUST run before this middleware so projectId
-// is available via c.get('projectId').
+/** Idempotency-Key middleware. Per [[wallet-http-contract]] G4 + [[idempotency-strategy]] D2-α. */
 
 import { createHash } from 'node:crypto';
 import { withTenant } from '@bokchoy/db';
@@ -41,8 +15,6 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 type IdempotencyContext = {
   Variables: {
-    // projectId is set by apiKeyMiddleware upstream; declared here so
-    // c.get('projectId') typechecks inside the middleware body.
     projectId: string;
     idempotencyKeyId?: number;
   };
@@ -64,16 +36,12 @@ type Decision =
   | { kind: 'mismatch' };
 
 export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async (c, next) => {
-  // GET / HEAD / OPTIONS bypass — they're idempotent by HTTP semantics.
   if (!MUTATING_METHODS.has(c.req.method)) {
     return next();
   }
 
+  // Header absent → handler-side natural-key dedup is primary; middleware no-ops.
   const idempotencyKey = c.req.header(HEADER_NAME);
-
-  // Header absent — server-derived natural-key path is primary; middleware
-  // is a no-op. The handler / wrapper is responsible for natural-key dedup
-  // (e.g., transactions.source_event_id UNIQUE).
   if (!idempotencyKey) {
     return next();
   }
@@ -90,17 +58,13 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
     );
   }
 
-  // Read raw body once; Hono caches it for subsequent c.req.json() / .text().
   const rawBody = await c.req.text();
   const bodyHash = createHash('sha256').update(rawBody).digest('hex');
   const requestParams = { bodyHash, contentType: c.req.header('content-type') ?? '' };
 
-  // ---- Caller's project resolved by Bearer middleware (apiKeyMiddleware). ----
   const projectId = c.get('projectId');
   if (!projectId) {
-    // Defense-in-depth: idempotency middleware composed without auth upstream.
-    // Should not happen in slice 8.1b routes; surface explicitly so misuse is
-    // loud, not silent.
+    // Defense-in-depth: surface auth-middleware misuse loudly, not silently.
     return c.json(
       {
         error: {
@@ -112,7 +76,6 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
     );
   }
 
-  // Lookup + lock-or-replay decision. Wrapped in withTenant for RLS GUC.
   const decision = await withTenant(db, projectId, async (tx): Promise<Decision> => {
     const rows = await tx.execute<LookupRow>(sql`
       SELECT
@@ -130,14 +93,7 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
     const row = rows[0];
 
     if (!row) {
-      // ON CONFLICT (project_id, idempotency_key) DO NOTHING closes the
-      // SELECT-then-INSERT race per [[wallet-http-contract]] G4 case 4. Two
-      // callers with the same key both see "no row" in the SELECT above; the
-      // second INSERT blocks on the unique index until the winner commits,
-      // then resolves to "no row inserted" (empty RETURNING) instead of
-      // raising 23505. We then re-SELECT the winner's row and dispatch the
-      // state machine — typically returning 409 BC001 because the winner is
-      // by construction in-flight (just committed milliseconds ago).
+      // ON CONFLICT DO NOTHING closes the SELECT-then-INSERT race: race-loser sees empty RETURNING, re-SELECTs winner.
       const inserted = await tx.execute<{ id: number }>(sql`
         -- allow-direct-mutation: idempotency-middleware (slice 8.1b INSERT path; ON CONFLICT DO NOTHING added slice 8.1.6 hardening per [[wallet-http-contract]] G4 case 4)
         INSERT INTO idempotency_keys
@@ -152,14 +108,7 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
         return { kind: 'proceed', rowId: newId };
       }
 
-      // Race lost. Re-SELECT the winner's row and dispatch a trimmed state
-      // machine: mismatch / replay / in_use only. Lock-expired re-lock is
-      // intentionally skipped — the winner just INSERTed milliseconds ago, so
-      // locked_at is fresh by construction; re-locking would race the winner
-      // and could cause double-execution of the handler when both transactions
-      // write their completion UPDATEs. Race-loser is canonically "in_use" per
-      // [[idempotency-strategy]] line 122; client retries on 409 per Stripe
-      // SDK pattern (RequestSender.ts:329) and resolves cleanly on retry.
+      // Race-loser: trimmed state machine (mismatch/replay/in_use). Re-lock skipped — winner is fresh by construction.
       const raced = await tx.execute<LookupRow>(sql`
         SELECT
           id,
@@ -174,12 +123,7 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
       `);
       const racedRow = raced[0];
       if (!racedRow) {
-        // ON CONFLICT returned no id (row exists) but re-SELECT returned no
-        // row. Reaper would have to fire between the two statements AND
-        // delete a row with completed_at NULL — but the reaper's DELETE
-        // WHERE clause filters on `completed_at IS NOT NULL` (per
-        // packages/db/drizzle/0006), so a fresh in-flight row cannot be
-        // reaped. Fail loud rather than swallow.
+        // Reaper filters on `completed_at IS NOT NULL`, so a fresh in-flight row cannot vanish between the two statements.
         throw new Error(
           'idempotency_keys race: ON CONFLICT returned no id but re-SELECT returned no row',
         );
@@ -193,17 +137,14 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
       return { kind: 'in_use' };
     }
 
-    // Body-mismatch trumps everything: same key reused with different request.
     if (row.body_hash && row.body_hash !== bodyHash) {
       return { kind: 'mismatch' };
     }
 
-    // Completed → replay.
     if (row.completed_at && row.response_status !== null) {
       return { kind: 'replay', status: row.response_status, body: row.response_body };
     }
 
-    // In-flight: locked + incomplete. Check timeout.
     if (row.locked_at) {
       const lockedAtMs = Date.parse(row.locked_at);
       const lockExpired = !Number.isNaN(lockedAtMs) && Date.now() - lockedAtMs > LOCK_TIMEOUT_MS;
@@ -212,8 +153,6 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
       }
     }
 
-    // Lock expired (or absent on a row that somehow has neither lock nor
-    // completion — defensive). Re-lock and proceed.
     await tx.execute(sql`
       -- allow-direct-mutation: idempotency-middleware (slice 8.1b — re-lock recovery path per [[idempotency-strategy]])
       UPDATE idempotency_keys
@@ -253,7 +192,6 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
     return c.json(decision.body, decision.status as ContentfulStatusCode);
   }
 
-  // Proceed: run the handler, then capture + persist the response.
   c.set('idempotencyKeyId', decision.rowId);
   await next();
 
@@ -263,9 +201,7 @@ export const idempotencyMiddleware = createMiddleware<IdempotencyContext>(async 
   try {
     responseBody = await cloned.json();
   } catch {
-    // Non-JSON response (e.g., text/html error page). Store status; body stays
-    // null. Replay returns null body which is structurally OK; observability
-    // surfaces the gap.
+    // Non-JSON response — store status only; replay's null body is structurally fine.
   }
 
   await withTenant(db, projectId, async (tx) => {

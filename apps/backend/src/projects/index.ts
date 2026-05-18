@@ -1,37 +1,4 @@
-// Projects module per [[backend-service-shape]] §2 + [[cockpit/admin-list-endpoints-contract]]
-// slice 8.4 cascade. Five cockpit-admin endpoints:
-//
-//   POST   /v1/projects                                      — create project (cockpit form submit)
-//   POST   /v1/projects/{projectId}/api-keys                 — issue first/additional SDK api_key
-//   GET    /v1/projects                                      — list projects for current org
-//   GET    /v1/projects/{projectId}                          — project detail + nested apiKeys[] (A1)
-//   DELETE /v1/projects/{projectId}/api-keys/{keyId}         — soft-revoke (revoked_at)
-//
-// Auth chain: adminGate({ resource: 'project'|'apiKey', actions, projectIdParam? })
-//   1. Better Auth session resolution + org resolution + BokChoy tenancy check
-//   2. Member lookup + Better Auth hasPermission against the static AC
-//   3. Sets c.var['admin.member'] + c.var['admin.org']
-//
-// (E2) split-POST per [[cockpit/admin-list-endpoints-contract]] — project
-// creation does NOT auto-issue an api_key. Cockpit makes two sequential
-// requests: POST /v1/projects, then POST /v1/projects/{id}/api-keys with
-// Idempotency-Key header for retry-safety on the second per
-// [[idempotency-strategy]] D2-α. Walks back the (E1) bundling pick per
-// [[cockpit/admin-list-endpoints-research]] F5 (production-cited × 0/3 —
-// Stripe / Vercel / Resend all split parent + child creation).
-//
-// Idempotency-Key middleware is on the api-key creation route (where the
-// race window exists), NOT on project creation (the (organization_id, slug)
-// unique index provides natural dedup — retries with same slug get 409
-// instead of orphan projects).
-//
-// RLS notes:
-//   - projects table: no RLS — INSERT via plain db client. organization_id
-//     bound from c.var['admin.org'].id (adminGate verified).
-//   - api_keys table: FORCE RLS with policy USING (project_id = TENANT_GUC).
-//     INSERT must happen inside withTenant(db, projectId, ...) so the GUC
-//     matches. project_id is the just-created project's id (adminGate's
-//     projectIdParam tenancy check confirmed it belongs to the org).
+/** Cockpit-admin endpoints for projects + api_keys. Per [[cockpit/admin-list-endpoints-contract]]. */
 
 import { createHmac, randomBytes } from 'node:crypto';
 import { apiKeys, currencies, projects, withTenant } from '@bokchoy/db';
@@ -48,9 +15,6 @@ import { db } from '../infra';
 
 const tracer = trace.getTracer('@bokchoy/projects');
 
-// Translate validator failure → Stripe-wrapped error per [[wallet-http-contract]]
-// G5 (X). Same shape as wallet module's hook — kept module-local to avoid a
-// cross-module helper import that would couple two unrelated features.
 const validationFailureHook: Hook<unknown, Env, string> = (result, c) => {
   if (!result.success) {
     const issues = result.error as readonly StandardSchemaV1.Issue[];
@@ -68,10 +32,7 @@ const validationFailureHook: Hook<unknown, Env, string> = (result, c) => {
   }
 };
 
-// ---- Schemas ----
-// Match cockpit's apps/cockpit/modules/projects/lib/create-project-schema.ts
-// constraints. Diverge → cockpit validates good input that backend rejects (or
-// vice versa). If this duplication bites, promote to @bokchoy/shared-types.
+// Schemas duplicated from cockpit's `create-project-schema.ts` — keep in sync or promote to @bokchoy/shared-types.
 
 const KEBAB_CASE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -91,16 +52,7 @@ const revokeApiKeyUrlParams = z.object({
   keyId: z.uuid(),
 });
 
-// ---- API-key generation ----
-// Mirror packages/db/scripts/create-api-key.ts canonical pattern:
-//   - 16 random bytes = 32 hex chars → bk_<env>_<32hex> (40 chars total)
-//   - First 12 chars (bk_<env>_<4hex>) = keyPrefix (UNIQUE indexed)
-//   - HMAC-SHA256(fullKey, BOKCHOY_API_KEY_HMAC_SECRET) = keyHash (bytea)
-//
-// Returns the plaintext fullKey + the row's bytea/keyPrefix for INSERT. Caller
-// is responsible for showing fullKey ONCE in the response and never persisting
-// it. The cockpit's visible-once modal per [[cockpit/first-run-journey]] step 7
-// is the only place the operator sees it.
+// Mirror `packages/db/scripts/create-api-key.ts`. fullKey is shown once, never persisted.
 
 function getHmacSecret(): string {
   const secret = process.env.BOKCHOY_API_KEY_HMAC_SECRET;
@@ -118,12 +70,7 @@ function generateApiKeyMaterial(env: 'live' | 'test') {
   return { fullKey, keyPrefix, keyHash };
 }
 
-// ---- Handlers ----
-
-// Match apps/backend/src/index.ts AppContext shape (superset of what the
-// projects routes need). Hono generic invariance — mount function signature
-// must accept the parent app's exact union, not a subset. ApiKeyContext is
-// unused by these handlers but included for the type match.
+// Superset of AppContext — Hono generic invariance forces the parent app's exact union on `mount`.
 type ProjectsAppContext = ApiKeyContext & IdempotencyContext & AdminContext;
 
 async function createProjectHandler(c: Context<AdminContext, '/v1/projects'>) {
@@ -144,19 +91,7 @@ async function createProjectHandler(c: Context<AdminContext, '/v1/projects'>) {
     },
     async (span) => {
       try {
-        // Slice M-2 — single transaction wraps project INSERT + seeded
-        // currencies INSERT per [[marketing/v1-shape]] Mitigation #3 +
-        // [[cockpit/first-run-journey]] step 6 (amendment owed). Atomicity:
-        // if the currencies seed fails for any reason, the project insert
-        // rolls back too — preventing the half-state (project exists, day-1
-        // marketing snippet `currency: 'gems'` fails with UnknownCurrencyError).
-        //
-        // We DON'T compose `withTenant(db, ...)` here because that opens its
-        // own transaction; nesting would create a savepoint and split the
-        // atomicity guarantee. Instead the GUC SET is inlined via the same
-        // `set_config(..., is_local=true)` pattern that withTenant uses at
-        // packages/db/src/with-tenant.ts:26 — transaction-scoped, applies to
-        // the currencies INSERT below, automatically released on commit/rollback.
+        // Inline GUC instead of withTenant: nested transactions would split the project+currencies atomicity.
         const row = await db.transaction(async (tx) => {
           const [inserted] = await tx
             .insert(projects)
@@ -172,12 +107,6 @@ async function createProjectHandler(c: Context<AdminContext, '/v1/projects'>) {
 
           await tx.execute(sql`SELECT set_config('app.current_tenant', ${inserted.id}, true)`);
 
-          // Default currency set per [[marketing/v1-shape]] hero snippet:
-          // `currency: 'gems'`. Display-name title-case follows the
-          // game-economy SDK convention surveyed in
-          // [[marketing/currencies-endpoint-research]]. decimals + isPremium
-          // + isTradable fall to schema defaults (0, false, false) —
-          // customer can update via cockpit later.
           await tx.insert(currencies).values([
             { projectId: inserted.id, code: 'gems', displayName: 'Gems' },
             { projectId: inserted.id, code: 'coins', displayName: 'Coins' },
@@ -193,12 +122,10 @@ async function createProjectHandler(c: Context<AdminContext, '/v1/projects'>) {
         if (err instanceof Error) {
           span.recordException(err);
           span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-          // Postgres unique_violation on (organization_id, slug)
           if (
             err.message.includes('projects_organization_id_slug_unique') ||
             err.message.includes('unique constraint')
           ) {
-            // 409 with Stripe-wrapped error per [[wallet-http-contract]] G5
             return null;
           }
         }
@@ -245,9 +172,7 @@ async function createApiKeyHandler(
     },
     async (span) => {
       try {
-        // BOKCHOY_API_KEY_ENV picks 'live' vs 'test' — defaults to 'live' so
-        // production never accidentally ships test-prefix keys. Local dev /
-        // staging set the env var explicitly to 'test'.
+        // Default 'live' so production never accidentally ships test-prefix keys.
         const env = process.env.BOKCHOY_API_KEY_ENV === 'test' ? 'test' : 'live';
         const { fullKey, keyPrefix, keyHash } = generateApiKeyMaterial(env);
 
@@ -294,32 +219,6 @@ async function createApiKeyHandler(
   return c.json(result, 201);
 }
 
-// (A1) project detail with nested apiKeys[] per
-// [[cockpit/admin-list-endpoints-contract]]. Powers [[cockpit/first-run-journey]]
-// step 11 (T2) verify-key polling — cockpit refetches every ~3s while no
-// api_key.lastUsedAt is observed. Single round-trip (project + keys) rather
-// than two queries because production cite × 2 (Vercel + Stripe nested-array
-// pattern) and round-trip cost dominates payload size at this volume.
-//
-// adminGate already verified: session valid, org resolved, projectId is a UUID,
-// project belongs to org, user is a member, user has 'project:read'. Handler
-// trusts the gate. A null `projects` row post-gate would be a TOCTOU race
-// against a DELETE — projects.organization_id FK is ON DELETE RESTRICT and
-// api_keys.project_id FK is ON DELETE CASCADE; the only delete path goes
-// through admin tooling that doesn't exist yet at slice 8.4.
-//
-// RLS chain:
-//   - projects select: plain `db` (no RLS on projects table per tenancy.ts).
-//   - api_keys select: must run inside withTenant(db, projectId, ...) since
-//     api_keys.enableRLS() + policy USING (project_id = TENANT_GUC) for the
-//     bokchoy_app role. Unset GUC raises; wrong-tenant GUC filters to zero
-//     rows.
-//
-// Response wire-shape: bare data per (R2) + matches listProjectsHandler. Field
-// name `keyPrefix` matches Drizzle schema (api-keys.ts) + matches the existing
-// createApiKeyHandler response. Contract spec says `prefix`; codebase shipped
-// `keyPrefix` first. Amendment to [[cockpit/admin-list-endpoints-contract]]
-// owed on the next /design pass.
 async function getProjectHandler(c: Context<AdminContext, '/v1/projects/:projectId'>) {
   const projectId = c.req.param('projectId') as string;
   const organizationId = c.var['admin.org'].id;
@@ -413,32 +312,10 @@ async function listProjectsHandler(c: Context<AdminContext, '/v1/projects'>) {
     },
   );
 
-  // Bare array per [[cockpit/admin-list-endpoints-contract]] (R2)
-  // bare-success-Stripe-wrapped-errors at MVP scope. Cursor-pagination via
-  // Stripe envelope adopted when (Pa-none) revisit-when fires.
   return c.json(rows, 200);
 }
 
-// Soft-revoke per [[cockpit/admin-list-endpoints-contract]] DELETE
-// /v1/projects/{projectId}/api-keys/{keyId}. revoked_at column on api_keys is
-// the canonical sentinel — slice 8.1a's apiKeyMiddleware already filters
-// `revoked_at IS NOT NULL` at lookup, so a successful revoke immediately
-// invalidates the key for SDK calls (no cache to bust).
-//
-// Disambiguation: a single UPDATE WHERE revoked_at IS NULL fails ambiguously
-// when 0 rows return — could be (a) keyId doesn't belong to this project, or
-// (b) the key exists but is already revoked. Contract maps these to 404 and
-// 422 respectively, so we follow up with a tenant-scoped SELECT to decide.
-// Cost: one extra SELECT only on the error path; happy path is single-query.
-//
-// Both queries run inside withTenant(db, projectId, ...) since api_keys is
-// FORCE-RLS — without the GUC, the policy `project_id = TENANT_GUC` evaluates
-// against unset and returns zero rows / rejects the UPDATE.
-//
-// Error code casing: `API_KEY_NOT_FOUND` + `ALREADY_REVOKED` UPPER_CASE
-// matches `createProjectHandler`'s `PROJECT_SLUG_EXISTS`. The vault contract
-// spells `already_revoked` lowercase — same divergence as the `keyPrefix` vs
-// `prefix` discrepancy on GET /v1/projects/{id}; amendment owed to the vault.
+// 0-row UPDATE is ambiguous (not_found vs already_revoked) — follow-up SELECT only on the error path.
 async function revokeApiKeyHandler(
   c: Context<AdminContext, '/v1/projects/:projectId/api-keys/:keyId'>,
 ) {
@@ -535,11 +412,6 @@ async function revokeApiKeyHandler(
   return c.json(result.data, 200);
 }
 
-// ---- Mount ----
-// Same pattern as mountWalletRoutes — registered onto the parent Hono app
-// rather than chained-export, avoiding the StandardSchema `Issue` type leak
-// from sValidator's inferred export type.
-
 export function mountProjectsRoutes(app: Hono<ProjectsAppContext>): void {
   app.post(
     '/v1/projects',
@@ -589,7 +461,4 @@ export function mountProjectsRoutes(app: Hono<ProjectsAppContext>): void {
   );
 }
 
-// Unused-imports placeholder — `and` is currently not needed but kept for
-// future filtering composition (e.g., status filter). Drop if it becomes
-// noise in lint.
-void and;
+void and; // kept for future status filter

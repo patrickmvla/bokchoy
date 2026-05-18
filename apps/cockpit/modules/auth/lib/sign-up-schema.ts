@@ -1,13 +1,6 @@
-// Zod schema for the sign-up form.
-//
-// Constraints mirror Better Auth's emailAndPassword defaults
-// (minPasswordLength=8) per Better Auth v1.x server-side validation —
-// keeping client-side validation aligned avoids "form passed but backend
-// rejected" UX surprises. Name uses min(1) since Better Auth's user table
-// has a NOT NULL name field per packages/db/src/schema/auth.ts.
-
 import { z } from 'zod';
 
+// Mirrors Better Auth defaults (minPasswordLength=8) — keeps client + server validation aligned.
 export const signUpSchema = z.object({
   name: z
     .string()

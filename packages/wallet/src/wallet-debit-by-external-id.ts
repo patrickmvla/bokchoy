@@ -1,9 +1,3 @@
-// walletDebitByExternalId wrapper per [[wallet/credit-route-contract]] (iii) +
-// [[wrapper-shape]] D2-α. Sister to walletCreditByExternalId — same lazy-create
-// + delegate shape. Calls wallet_debit_by_external_id from 0010 migration,
-// which raises BC010 (InsufficientFunds) when the post-debit balance would
-// breach the wallet's allow_negative_balance flag.
-
 import type { Db, Tx } from '@bokchoy/db';
 import { sql } from 'drizzle-orm';
 import { readNumericAsString, readUuidOrText, rowToNumber, throwTranslated } from './internal';

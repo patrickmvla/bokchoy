@@ -1,24 +1,13 @@
-// Pure function mapping (Postgres SQLSTATE, message, constraint name) to a
-// typed WalletError per [[wrapper-shape]]. Returns null when the input doesn't
-// match any known mapping — caller re-raises the original PostgresError.
-//
-// RAISE EXCEPTION format strings come from packages/db/drizzle/0004_wallet_functions.sql.
-// Format-change → unit-test failure → catch in CI before production drift.
+/** SQLSTATE → typed WalletError. Returns null for unmatched cases (caller re-raises PostgresError). */
 
 import { type BcCode, type ErrorDetails, WalletError } from './errors';
 
-// FK-violation 23503 translation per [[wrapper-shape]] Fork 3 (P).
-// Constraint-name → BcCode. Unknown constraint names return null (re-raise)
-// so a future migration adding an FK to the protected tables surfaces as a
-// typed PostgresError in tests, not as a misleading BC code.
+// Unknown FK constraints return null so a future schema-add surfaces as PostgresError, not a misleading BC.
 const FK_TRANSLATION: Record<string, BcCode> = {
   transactions_project_reason_code_fk: 'BC050',
 };
 
-// Capture non-whitespace tokens via \S+. UUIDs (36 chars, dashed) and numerics
-// (with or without decimals) never contain spaces — safe across the placeholder
-// shapes raised today. Currency codes are constrained to ^[A-Za-z0-9_]{1,16}$
-// per packages/db/src/schema/wallet.ts (currencies_code_check), also whitespace-free.
+// RAISE EXCEPTION format strings from packages/db/drizzle/0004_wallet_functions.sql; format-change → test fail.
 const BC010_RE = /^InsufficientFunds: wallet=(\S+) requested=(\S+) available=(\S+)$/;
 const BC020_RE = /^TenantMismatch: GUC=(\S+) p_project_id=(\S+)$/;
 const BC021_RE = /^WalletNotFound: wallet_id=(\S+) project_id=(\S+)$/;
