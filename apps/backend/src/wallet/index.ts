@@ -1,42 +1,15 @@
-// Wallet feature module per [[backend-service-shape]] §2 + [[wallet-mechanics]]
-// + [[wallet-http-contract]] slice 8.1c + slice 8.2.1.
-//
-// Routes (slash-suffix-verb on resource id per [[url-pattern-research]] F1):
-//   POST /v1/wallets/{walletId}/credit                       — slice 8.1c: SDK-auth, idempotency-key
-//   POST /v1/wallets/{walletId}/debit                        — slice 8.1c: SDK-auth, idempotency-key
-//   POST /v1/projects/{projectId}/bootstrap-reason-codes     — slice 8.2.1: cockpit-admin, naturally-idempotent
-//
-// SDK auth chain (credit/debit) per [[wallet-http-contract]] handler shape:
-//   apiKeyMiddleware  → Bearer auth, sets c.var.projectId + apiKeyId
-//   idempotencyMiddleware → optional Idempotency-Key 4-state machine
-//   sValidator('param') → walletId UUID
-//   sValidator('json')  → camelCase body schema
-//   handler           → withTenant → tracer.startActiveSpan → walletCredit/Debit
-//
-// Admin auth chain (bootstrap-reason-codes) per [[admin-auth-surface]] contract:
-//   adminGate({ resource: 'reasonCode', actions: ['bootstrap'], projectIdParam: 'projectId' })
-//     → validates session, body/query/session-resolves org, BokChoy-side
-//       tenancy check (project.organization_id === resolvedOrgId), member
-//       lookup, hasPermission. Sets c.var['admin.member'] + c.var['admin.org'].
-//   handler         → withTenant → tracer.startActiveSpan → bootstrapProjectReasonCodes
-//
-// No Idempotency-Key middleware on bootstrap — the underlying SQL function uses
-// INSERT … ON CONFLICT DO NOTHING (per packages/wallet/src/bootstrap-project-reason-codes.ts
-// line 6), so re-runs naturally return inserted=0 instead of erroring. The
-// HTTP-layer Idempotency-Key state machine is for non-idempotent operations
-// (credit/debit) where the contract requires replay-safety.
-//
-// Errors propagate to the app-level onError (apps/backend/src/infra/error-middleware.ts):
-// WalletError → Stripe-wrapped `{error:{code,message,...details}}` with BCxxx→HTTP map.
+/** Wallet HTTP routes. Per [[wallet-http-contract]] + [[wallet/credit-route-contract]] + [[wallet/balance-history-contract]]. */
 
 import { withTenant } from '@bokchoy/db';
 import {
   bootstrapProjectReasonCodes,
   WalletError,
+  walletBalanceByExternalId,
   walletCredit,
   walletCreditByExternalId,
   walletDebit,
   walletDebitByExternalId,
+  walletHistoryByExternalId,
 } from '@bokchoy/wallet';
 import { type Hook, sValidator } from '@hono/standard-validator';
 import { SpanStatusCode, trace } from '@opentelemetry/api';
@@ -50,13 +23,6 @@ import { type IdempotencyContext, idempotencyMiddleware } from '../idempotency';
 import { db } from '../infra';
 import { hashPlayerExternalIdForOtel } from '../telemetry';
 
-// Translate @hono/standard-validator's default `{success:false, error:Issues, data}`
-// shape into [[wallet-http-contract]] G5 (X) Stripe-wrapped:
-//   400 { "error": { "code": "VALIDATION_ERROR", "message": "...", "issues": [...] } }
-// where `issues` carries StandardSchemaV1.Issue[] (`message`, `path`).
-//
-// `Hook` is the validator's hook callback type — runs ONCE on validation failure;
-// returns a Response which @hono/standard-validator sends instead of its default.
 const validationFailureHook: Hook<unknown, Env, string> = (result, c) => {
   if (!result.success) {
     const issues = result.error as readonly StandardSchemaV1.Issue[];
@@ -74,11 +40,6 @@ const validationFailureHook: Hook<unknown, Env, string> = (result, c) => {
   }
 };
 
-// Body schema per [[wallet-http-contract]] slice 8.1c (camelCase; JS-safe int range
-// per [[wrapper-shape]] amount: number revisit-when on real-money use case).
-// Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9_007_199_254_740_991 — contract's literal
-// 9_007_199_254_740_992 is 2^53 (the unsafe boundary), MAX_SAFE_INTEGER is the
-// last value losslessly representable.
 const creditDebitBody = z.object({
   amount: z.number().positive().max(Number.MAX_SAFE_INTEGER),
   currencyId: z.uuid(),
@@ -91,16 +52,7 @@ const creditDebitBody = z.object({
 
 const walletIdParam = z.object({ walletId: z.uuid() });
 
-// URL-param + body schemas for the player-centric routes per
-// [[wallet/credit-route-contract]] (ii) + (i).
-//   • playerExternalId — same regex as the DB CHECK constraint on
-//     players.external_id (RFC 3986 unreserved minus '~'; 1-128 chars).
-//     Defense-in-depth: rejected at the route boundary before the DB sees
-//     it, surfaces as Stripe-wrapped VALIDATION_ERROR.
-//   • currencyCode — matches currencies.code regex from
-//     packages/db/src/schema/wallet.ts (1-16 alphanum/underscore chars).
-//   • creditDebitByExternalIdBody — same as creditDebitBody minus currencyId
-//     (currency now in the URL).
+// playerExternalId regex matches `players.external_id` CHECK in packages/db schema (defense-in-depth at route boundary).
 const PLAYER_EXTERNAL_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const CURRENCY_CODE_RE = /^[A-Za-z0-9_]{1,16}$/;
 
@@ -118,20 +70,19 @@ const creditDebitByExternalIdBody = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 
+const historyQueryParam = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(10),
+  starting_after: z.coerce.number().int().positive().optional(),
+});
+
 type WalletAppContext = ApiKeyContext & IdempotencyContext;
 
 const tracer = trace.getTracer('@bokchoy/wallet');
 
-// Shared handler logic — the wrapper to invoke is the only difference between
-// credit and debit; auth chain, span attributes, error path, response shape are
-// identical. Per [[wallet-http-contract]] slice 8.1c handler shape verbatim.
 function makeMutationHandler(
   operation: 'wallet.credit' | 'wallet.debit',
   wrapper: typeof walletCredit | typeof walletDebit,
 ) {
-  // Hono's typed Context narrows generic param to the specific path; we pin to a
-  // shared body type. The c.req.valid('json'/'param') typings are derived from the
-  // sValidator chain at the route definition site.
   return async (
     c: Context<WalletAppContext, '/v1/wallets/:walletId/credit' | '/v1/wallets/:walletId/debit'>,
   ) => {
@@ -185,18 +136,6 @@ function makeMutationHandler(
   };
 }
 
-// Player-centric credit/debit handler factory per [[wallet/credit-route-contract]]
-// (i). Same auth chain as the wallet-id-keyed routes (apiKeyMiddleware +
-// idempotencyMiddleware) but takes (playerExternalId, currencyCode) in the URL
-// and lazy-creates player + wallet on first credit per (iii). Currency code
-// is the customer-facing `currencies.code` slug; backend resolves to currencyId
-// inside the SQL function.
-//
-// OTel attributes per (i) verbatim: bokchoy.project_id, bokchoy.player_external_id_hash
-// (HMAC-truncated per (iv)), bokchoy.currency_code, bokchoy.amount, bokchoy.reason_code.
-// bokchoy.wallet_id is NOT in the attribute list — the operation is identified
-// by player_external_id_hash + currency_code, not by wallet_id (which is
-// lazy-created and not visible to the caller until response time).
 function makeByExternalIdMutationHandler(
   operation: 'wallet.credit_by_external_id' | 'wallet.debit_by_external_id',
   wrapper: typeof walletCreditByExternalId | typeof walletDebitByExternalId,
@@ -248,20 +187,12 @@ function makeByExternalIdMutationHandler(
               metadata: body.metadata,
             }),
           );
-          // 201 per [[wallet/credit-route-contract]] (i) — new transaction
-          // record (and, on first credit, new player + wallet rows). Bare-data
-          // shape per [[wallet-http-contract]] G5.
           return c.json(result, 201);
         } catch (err) {
-          // UNKNOWN_CURRENCY is the only WalletError class the global
-          // errorMiddleware would mis-map (BC060 → 422 in the table; the
-          // M-1.5 contract specifies 404 with availableCodes). Catch locally,
-          // form the response, let everything else propagate.
+          // BC060 needs handler-local 404 with availableCodes — global errorMiddleware would map it to 422.
           if (err instanceof WalletError && err.details.code === 'BC060') {
             span.recordException(err);
             span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
-            // Re-query inside the same tenant to enumerate available codes.
-            // Cheap on the error path; the happy path never runs it.
             const rows = await withTenant(db, projectId, async (tx) =>
               tx.execute(
                 sql`SELECT code FROM currencies WHERE project_id = ${projectId}::uuid ORDER BY code ASC`,
@@ -295,12 +226,124 @@ function makeByExternalIdMutationHandler(
   };
 }
 
-// Bootstrap-reason-codes handler — slice 8.2.1 first admin-auth consumer per
-// [[admin-auth-surface]]. adminGate has already validated session + org context
-// + BokChoy-side tenancy check (project.organization_id === resolvedOrgId) +
-// member + permission by the time this runs. c.req.param('projectId') is
-// guaranteed UUID-shape. c.var['admin.org'].id === project.organization_id by
-// invariant. withTenant scopes the RLS GUC to the project for the wrapper call.
+async function balanceByExternalIdHandler(
+  c: Context<WalletAppContext, '/v1/players/:playerExternalId/wallets/:currencyCode'>,
+) {
+  const projectId = c.get('projectId');
+  const { playerExternalId, currencyCode } = c.req.valid('param' as never) as {
+    playerExternalId: string;
+    currencyCode: string;
+  };
+
+  return tracer.startActiveSpan(
+    'wallet.balance',
+    {
+      attributes: {
+        'db.system': 'postgresql',
+        'db.operation': 'wallet_balance_by_external_id',
+        'bokchoy.project_id': projectId,
+        'bokchoy.player_external_id_hash': hashPlayerExternalIdForOtel(playerExternalId),
+        'bokchoy.currency_code': currencyCode,
+      },
+    },
+    async (span) => {
+      try {
+        const result = await withTenant(db, projectId, async (tx) =>
+          walletBalanceByExternalId(tx, { projectId, playerExternalId, currencyCode }),
+        );
+        span.setAttribute('bokchoy.wallet_exists', result.exists);
+        if (!result.exists) {
+          return c.json({ balance: '0', currencyCode }, 200);
+        }
+        return c.json(
+          {
+            balance: result.balance,
+            currencyCode,
+            walletId: result.walletId,
+            playerId: result.playerId,
+            updatedAt: result.updatedAt.toISOString(),
+          },
+          200,
+        );
+      } catch (err) {
+        if (err instanceof Error) {
+          span.recordException(err);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        }
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
+async function historyByExternalIdHandler(
+  c: Context<WalletAppContext, '/v1/players/:playerExternalId/wallets/:currencyCode/transactions'>,
+) {
+  const projectId = c.get('projectId');
+  const { playerExternalId, currencyCode } = c.req.valid('param' as never) as {
+    playerExternalId: string;
+    currencyCode: string;
+  };
+  const query = c.req.valid('query' as never) as z.infer<typeof historyQueryParam>;
+  const limit = query.limit;
+  const startingAfter = query.starting_after;
+
+  return tracer.startActiveSpan(
+    'wallet.history',
+    {
+      attributes: {
+        'db.system': 'postgresql',
+        'db.operation': 'wallet_history_by_external_id',
+        'bokchoy.project_id': projectId,
+        'bokchoy.player_external_id_hash': hashPlayerExternalIdForOtel(playerExternalId),
+        'bokchoy.currency_code': currencyCode,
+        'bokchoy.limit': limit,
+        'bokchoy.cursor': startingAfter === undefined ? 'first_page' : 'paginated',
+      },
+    },
+    async (span) => {
+      try {
+        const result = await withTenant(db, projectId, async (tx) =>
+          walletHistoryByExternalId(tx, {
+            projectId,
+            playerExternalId,
+            currencyCode,
+            limit,
+            startingAfter,
+          }),
+        );
+        span.setAttribute('bokchoy.transaction_count', result.data.length);
+        span.setAttribute('bokchoy.has_more', result.hasMore);
+        const data = result.data.map((row) => {
+          const wire: Record<string, unknown> = {
+            id: row.id,
+            createdAt: row.createdAt.toISOString(),
+            kind: row.kind,
+            amount: row.amount,
+            reasonCode: row.reasonCode,
+            metadata: row.metadata,
+          };
+          if (row.sourceEventId !== null) wire.sourceEventId = row.sourceEventId;
+          if (row.relatedId !== null) wire.relatedId = row.relatedId;
+          if (row.relatedType !== null) wire.relatedType = row.relatedType;
+          return wire;
+        });
+        return c.json({ data, hasMore: result.hasMore }, 200);
+      } catch (err) {
+        if (err instanceof Error) {
+          span.recordException(err);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+        }
+        throw err;
+      } finally {
+        span.end();
+      }
+    },
+  );
+}
+
 type BootstrapAppContext = AdminContext;
 
 async function bootstrapReasonCodesHandler(
@@ -341,11 +384,7 @@ async function bootstrapReasonCodesHandler(
   return c.json({ inserted }, 200);
 }
 
-// Mounted onto the parent Hono app rather than chained-export to avoid the
-// `Issue` type leak from @standard-schema/spec into the inferred export type
-// (TS 2883 — Hono's chained `.post(...).post(...)` builder builds a generic
-// type that references Issue, which isn't transitively re-exportable from
-// outside @hono/standard-validator's package boundary).
+// Mounted (not chained-export) to avoid the @standard-schema/spec Issue type leak through Hono's chained-builder generic.
 export function mountWalletRoutes(app: Hono<WalletAppContext & BootstrapAppContext>): void {
   app.post(
     '/v1/wallets/:walletId/credit',
@@ -363,10 +402,6 @@ export function mountWalletRoutes(app: Hono<WalletAppContext & BootstrapAppConte
     sValidator('json', creditDebitBody, validationFailureHook),
     makeMutationHandler('wallet.debit', walletDebit),
   );
-  // Slice M-1.5 player-centric routes per [[wallet/credit-route-contract]].
-  // Existing wallet-id-keyed routes above stay — different audience (internal/admin
-  // callers who already hold a walletId). These two are SDK-facing for the
-  // currency-code + player-external-id ergonomics per [[marketing/v1-shape]] (iii).
   app.post(
     '/v1/players/:playerExternalId/wallets/:currencyCode/credit',
     apiKeyMiddleware,
@@ -382,6 +417,24 @@ export function mountWalletRoutes(app: Hono<WalletAppContext & BootstrapAppConte
     sValidator('param', playerCurrencyParam, validationFailureHook),
     sValidator('json', creditDebitByExternalIdBody, validationFailureHook),
     makeByExternalIdMutationHandler('wallet.debit_by_external_id', walletDebitByExternalId),
+  );
+  // Player-centric read routes per [[wallet/balance-history-contract]] (i) + (ii).
+  // No idempotencyMiddleware on GETs — GETs are naturally idempotent per HTTP
+  // spec and Stripe production convention scopes Idempotency-Key to mutating
+  // operations only. Auth chain: apiKeyMiddleware + sValidator('param') for both,
+  // plus sValidator('query') for history.
+  app.get(
+    '/v1/players/:playerExternalId/wallets/:currencyCode',
+    apiKeyMiddleware,
+    sValidator('param', playerCurrencyParam, validationFailureHook),
+    balanceByExternalIdHandler,
+  );
+  app.get(
+    '/v1/players/:playerExternalId/wallets/:currencyCode/transactions',
+    apiKeyMiddleware,
+    sValidator('param', playerCurrencyParam, validationFailureHook),
+    sValidator('query', historyQueryParam, validationFailureHook),
+    historyByExternalIdHandler,
   );
   app.post(
     '/v1/projects/:projectId/bootstrap-reason-codes',

@@ -50,7 +50,7 @@ async function setup() {
     await tx`INSERT INTO projects (id, organization_id, name, slug) VALUES
              (${PROJECT_ID}, ${ORG_ID}, 'fn-smoke', 'fn-smoke'),
              (${PROJECT_OTHER}, ${ORG_ID}, 'fn-other', 'fn-other')`;
-    await tx`INSERT INTO players (id, project_id) VALUES (${PLAYER_ID}, ${PROJECT_ID})`;
+    await tx`INSERT INTO players (id, project_id, external_id) VALUES (${PLAYER_ID}, ${PROJECT_ID}, 'smoke-ext-id')`;
     await tx`INSERT INTO currencies (id, project_id, code, display_name) VALUES
              (${CURRENCY_GEMS}, ${PROJECT_ID}, 'gems', 'Gems'),
              (${CURRENCY_GOLD}, ${PROJECT_ID}, 'gold', 'Gold')`;
@@ -281,6 +281,139 @@ async function test7_currency_mismatch() {
   }
 }
 
+// Balance + history smoke tests per [[wallet/balance-history-contract]]
+// cascade #19. Tests the wrapper-layer JOIN queries against the live tenant
+// context, sans the HTTP layer. Run BEFORE test8/9 because deidentify mutates
+// players.id and would break the JOIN on players.external_id.
+
+async function test10_balance_join_known_wallet() {
+  // After tests 1-7: test1 credit 100 (committed), test2 idempotent replay
+  // (no change), test3 debit 30 (committed), tests 4-7 raise BCxxx and roll
+  // back. Expected balance: 100 - 30 = 70.0000.
+  const row = await withTenant(PROJECT_ID, async (tx) => {
+    const rows = await tx<{ wallet_id: string; player_id: string; balance: string }[]>`
+      SELECT w.id AS wallet_id, w.player_id, w.balance
+      FROM wallets w
+      JOIN players    p ON p.id = w.player_id
+      JOIN currencies c ON c.id = w.currency_id
+      WHERE w.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+        AND c.code = 'gems'
+      LIMIT 1
+    `;
+    return rows[0];
+  });
+  if (row !== undefined && row.balance === '70.0000' && row.wallet_id === WALLET_ID) {
+    ok(`Test 10: balance JOIN read returns balance=${row.balance} for known wallet`);
+  } else {
+    fail(`Test 10: unexpected row=${JSON.stringify(row)} (expected balance=70.0000)`);
+  }
+}
+
+async function test11_balance_join_unknown_player() {
+  // Unknown external_id → JOIN returns zero rows. Route layer turns this into
+  // synthesized `{balance:"0", currencyCode}` per
+  // [[wallet/balance-history-contract]] (iii). Wrapper returns {exists:false}.
+  const rows = await withTenant(PROJECT_ID, async (tx) => {
+    return await tx<unknown[]>`
+      SELECT w.id, w.balance
+      FROM wallets w
+      JOIN players    p ON p.id = w.player_id
+      JOIN currencies c ON c.id = w.currency_id
+      WHERE w.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'never-seen-id'
+        AND c.code = 'gems'
+      LIMIT 1
+    `;
+  });
+  if (rows.length === 0) {
+    ok('Test 11: balance JOIN read returns 0 rows for unknown player (route synthesizes zero)');
+  } else {
+    fail(`Test 11: expected 0 rows, got ${rows.length}`);
+  }
+}
+
+async function test12_history_pagination_and_ordering() {
+  // tests 1-7 have committed 2 transactions on WALLET_ID (test1 credit, test3
+  // debit). Fetch with limit=1 → 1 row + hasMore=true. Pass cursor → next row.
+  // ORDER BY t.id DESC → newest first.
+  const firstPage = await withTenant(PROJECT_ID, async (tx) => {
+    return await tx<{ id: string; kind: string; amount: string }[]>`
+      SELECT t.id::text, t.kind, t.amount::text
+      FROM transactions t
+      JOIN wallets    w ON w.id = t.wallet_id
+      JOIN players    p ON p.id = w.player_id
+      JOIN currencies c ON c.id = w.currency_id
+      WHERE t.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+        AND c.code = 'gems'
+      ORDER BY t.id DESC
+      LIMIT 2
+    `;
+  });
+  if (firstPage.length < 2) {
+    fail(`Test 12: expected >= 2 transactions, got ${firstPage.length}`);
+    return;
+  }
+  // ORDER BY id DESC → newest first. id is BIGSERIAL monotonic. First row
+  // should have the higher id.
+  const firstId = parseInt(firstPage[0].id, 10);
+  const secondId = parseInt(firstPage[1].id, 10);
+  if (firstId <= secondId) {
+    fail(`Test 12: expected DESC order, got ids ${firstId} then ${secondId}`);
+    return;
+  }
+  // Now paginate with starting_after = firstId → should return the older row.
+  const secondPage = await withTenant(PROJECT_ID, async (tx) => {
+    return await tx<{ id: string; kind: string }[]>`
+      SELECT t.id::text, t.kind
+      FROM transactions t
+      JOIN wallets    w ON w.id = t.wallet_id
+      JOIN players    p ON p.id = w.player_id
+      JOIN currencies c ON c.id = w.currency_id
+      WHERE t.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+        AND c.code = 'gems'
+        AND t.id < ${firstId}::bigint
+      ORDER BY t.id DESC
+      LIMIT 1
+    `;
+  });
+  if (secondPage.length === 1 && parseInt(secondPage[0].id, 10) === secondId) {
+    ok(
+      `Test 12: history pagination DESC ordering + cursor handoff works (first id=${firstId}, cursor → ${secondPage[0].id})`,
+    );
+  } else {
+    fail(
+      `Test 12: cursor pagination failed; expected id=${secondId}, got ${JSON.stringify(secondPage)}`,
+    );
+  }
+}
+
+async function test13_cross_tenant_isolation_read() {
+  // Read PROJECT_ID's wallet from PROJECT_OTHER's tenant context. RLS policies
+  // on wallets / players / currencies / transactions all filter by current
+  // tenant GUC. Under PROJECT_OTHER context, the JOIN returns 0 rows even
+  // though the WALLET_ID + smoke-ext-id exist (just not in PROJECT_OTHER).
+  const rows = await withTenant(PROJECT_OTHER, async (tx) => {
+    return await tx<unknown[]>`
+      SELECT w.id, w.balance
+      FROM wallets w
+      JOIN players    p ON p.id = w.player_id
+      JOIN currencies c ON c.id = w.currency_id
+      WHERE w.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+        AND c.code = 'gems'
+      LIMIT 1
+    `;
+  });
+  if (rows.length === 0) {
+    ok('Test 13: cross-tenant balance read returns 0 rows (RLS-isolated)');
+  } else {
+    fail(`Test 13: cross-tenant leak — got ${rows.length} rows from PROJECT_OTHER context`);
+  }
+}
+
 async function test8_deidentify_happy_path() {
   // Run via admin (BYPASSRLS) so we don't need to set the GUC. Set the
   // anon_secret as a transaction-local GUC.
@@ -337,6 +470,12 @@ try {
   await test5_tenant_mismatch();
   await test6_wallet_not_found();
   await test7_currency_mismatch();
+  // Balance + history smoke runs BEFORE deidentify because deidentify replaces
+  // players.id with anon UUIDv8, breaking the JOIN on players.external_id.
+  await test10_balance_join_known_wallet();
+  await test11_balance_join_unknown_player();
+  await test12_history_pagination_and_ordering();
+  await test13_cross_tenant_isolation_read();
   await test8_deidentify_happy_path();
   await test9_deidentify_missing_secret();
 } finally {

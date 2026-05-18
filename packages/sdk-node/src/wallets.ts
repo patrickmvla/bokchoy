@@ -1,22 +1,4 @@
-// wallets namespace per [[marketing/v1-shape]] (iii). Friendly-name API
-// — `player`, `currency`, `reason` — translated to the wire-shape that the
-// backend's `/v1/players/:playerExternalId/wallets/:currencyCode/{credit,debit}`
-// route expects per [[wallet/credit-route-contract]] (i).
-//
-// Translation table (SDK arg → wire location):
-//   player        → URL path segment :playerExternalId (URL-encoded by http.ts)
-//   currency      → URL path segment :currencyCode      (URL-encoded by http.ts)
-//   reason        → body.reasonCode                     (camelCase wire rename)
-//   amount        → body.amount
-//   sourceEventId → body.sourceEventId
-//   relatedId     → body.relatedId
-//   relatedType   → body.relatedType
-//   metadata      → body.metadata
-//   idempotencyKey → Idempotency-Key header             (auto-generated if absent)
-//
-// Result shape is the backend's flat four-field response per (i) verbatim:
-// { transactionId, walletId, playerId, balanceAfter }. balanceAfter is a
-// NUMERIC(20,4)-precision string per the contract's float-precision note.
+/** wallets namespace — friendly-name API per [[marketing/v1-shape]] (iii). */
 
 import type { HttpClient } from './http';
 
@@ -63,9 +45,7 @@ interface WireBody {
 }
 
 function toWireBody(params: WalletMutationParams): WireBody {
-  // Build defensively — only emit keys the customer actually provided so the
-  // request body is minimal and the server's Zod schema sees `undefined` as
-  // absent rather than as a value to validate.
+  // Only emit keys the customer provided — server Zod schema treats absent vs undefined-valued differently.
   const body: WireBody = {
     amount: params.amount,
     reasonCode: params.reason,
@@ -75,6 +55,64 @@ function toWireBody(params: WalletMutationParams): WireBody {
   if (params.relatedType !== undefined) body.relatedType = params.relatedType;
   if (params.metadata !== undefined) body.metadata = params.metadata;
   return body;
+}
+
+/** Parameters for wallets.balance — player-centric balance read. */
+export interface WalletBalanceParams {
+  /** Customer-controlled player identifier; URL-safe per backend regex `[A-Za-z0-9._-]{1,128}`. */
+  player: string;
+  /** Currency slug registered in this project. */
+  currency: string;
+}
+
+/** Response from wallets.balance. Optional fields absent when the wallet row hasn't been materialized yet. */
+export interface WalletBalanceResult {
+  balance: string;
+  currencyCode: string;
+  walletId?: string;
+  playerId?: string;
+  updatedAt?: string;
+}
+
+/** Parameters for wallets.history — player-centric activity feed. */
+export interface WalletHistoryParams {
+  /** Customer-controlled player identifier. */
+  player: string;
+  /** Currency slug registered in this project. */
+  currency: string;
+  /** Page size, default 10, max 100 enforced server-side. */
+  limit?: number;
+  /** Cursor — pass `nextCursor` from a previous response to fetch the next page. Opaque to callers. */
+  startingAfter?: number;
+}
+
+/** One transaction row in a wallets.history response. */
+export interface WalletHistoryItem {
+  /** Audit-log transaction id (server-issued, monotonic). */
+  id: number;
+  /** ISO timestamp of the transaction. */
+  createdAt: string;
+  /** Operation kind — e.g. 'currency_credit', 'currency_debit'. Other kinds appear for non-wallet rows. */
+  kind: string;
+  /** NUMERIC(20,4)-precision amount as a string. Sign is implicit in `kind`. */
+  amount: string;
+  /** Reason code registered for this project. */
+  reasonCode: string;
+  /** Optional dedup hint propagated to the audit log; omitted when absent. */
+  sourceEventId?: string;
+  /** Optional polymorphic FK to a sibling audit row. */
+  relatedId?: number;
+  relatedType?: 'loot_roll' | 'iap_receipt' | 'compensation_grant';
+  /** Customer-defined opaque payload. Always present (defaults to `{}`). */
+  metadata: Record<string, unknown>;
+}
+
+/** Response from wallets.history. */
+export interface WalletHistoryResult {
+  data: WalletHistoryItem[];
+  hasMore: boolean;
+  /** Opaque cursor — pass to the next call's `startingAfter` to paginate. Only present when `hasMore` is true. */
+  nextCursor?: number;
 }
 
 export class WalletsApi {
@@ -96,5 +134,39 @@ export class WalletsApi {
       body: toWireBody(params),
       ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
     });
+  }
+
+  /**
+   * Read a player's balance for a currency. Returns `{ balance: "0", currencyCode }` for
+   * unknown players or never-credited (player, currency) pairs — no error path for the
+   * common "new player render wallet UI" case per
+   * [[wallet/balance-history-contract]] (iii).
+   */
+  balance(params: WalletBalanceParams): Promise<WalletBalanceResult> {
+    return this.http.get<WalletBalanceResult>({
+      pathSegments: ['v1', 'players', params.player, 'wallets', params.currency],
+    });
+  }
+
+  /**
+   * Read a player's transaction history for a currency. Newest first, cursor-paginated.
+   * Returns `{ data: [], hasMore: false }` for unknown wallets or empty history. Compute
+   * running balance client-side from `kind` + `amount` (signed delta) if needed.
+   */
+  async history(params: WalletHistoryParams): Promise<WalletHistoryResult> {
+    const result = await this.http.get<{ data: WalletHistoryItem[]; hasMore: boolean }>({
+      pathSegments: ['v1', 'players', params.player, 'wallets', params.currency, 'transactions'],
+      query: {
+        ...(params.limit !== undefined ? { limit: params.limit } : {}),
+        ...(params.startingAfter !== undefined ? { starting_after: params.startingAfter } : {}),
+      },
+    });
+    if (result.hasMore && result.data.length > 0) {
+      const lastRow = result.data[result.data.length - 1];
+      if (lastRow !== undefined) {
+        return { data: result.data, hasMore: true, nextCursor: lastRow.id };
+      }
+    }
+    return { data: result.data, hasMore: result.hasMore };
   }
 }

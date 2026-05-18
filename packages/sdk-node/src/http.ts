@@ -1,20 +1,4 @@
-// HTTP client for @bokchoy/sdk-node. Internal module — not part of the
-// public API surface. Owns:
-//   • URL construction with encodeURIComponent on every customer-supplied
-//     path segment (defense-in-depth against path injection — backend also
-//     validates via Zod regex, but the SDK is the first line).
-//   • Header composition: Bearer auth, Idempotency-Key (auto-generated as
-//     `bokchoy-sdk-retry-${uuid4()}` per [[wallet-mechanics]] Part 3 A17 if
-//     the caller didn't supply one), Content-Type, User-Agent for backend-
-//     side SDK-version observability per [[oss-sdk-only]] engineering note.
-//   • Response translation: 2xx → typed parse; non-2xx → typed error class
-//     dispatched by `error.code` per [[wallet-http-contract]] G5 Stripe-
-//     wrapped envelope. Network/parse failures wrap into BokchoyConnectionError.
-//
-// Cross-runtime fetch: uses globalThis.fetch (Node 20+, Bun, Cloudflare
-// Workers, browsers, Deno — every modern JS runtime has it). The fetch can
-// be overridden via the SDK constructor for testing or custom HTTP clients
-// (proxy, retry middleware, etc.).
+/** Internal HTTP client. globalThis.fetch by default; replaceable via SDK constructor for tests/middleware. */
 
 import {
   BokchoyApiError,
@@ -34,12 +18,6 @@ export interface HttpClientConfig {
   fetchImpl: FetchLike;
 }
 
-// Shape of the Stripe-wrapped error body from the backend per
-// [[wallet-http-contract]] G5: { error: { code, message, ...flattened-details } }.
-// `code` and `message` are always present; everything else is variant-specific
-// and read defensively (the SDK doesn't trust the server to ship a known
-// shape forever — future backend versions may add fields, drop optional
-// ones, etc.).
 interface WireErrorEnvelope {
   error: {
     code: string;
@@ -63,8 +41,6 @@ export class HttpClient {
   private readonly fetchImpl: FetchLike;
 
   constructor(config: HttpClientConfig) {
-    // Strip trailing slash so `${baseUrl}${path}` concatenation works for
-    // both 'https://api.bokchoy.com' and 'https://api.bokchoy.com/'.
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.apiKey = config.apiKey;
     this.userAgent = config.userAgent;
@@ -99,8 +75,48 @@ export class HttpClient {
         body: JSON.stringify(args.body),
       });
     } catch (err) {
-      // Fetch threw — DNS / TCP / TLS / timeout / aborted. No structured
-      // response to translate.
+      throw new BokchoyConnectionError(
+        `Network request to ${url} failed: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (err) {
+      throw new BokchoyConnectionError(
+        `Failed to parse JSON response from ${url} (status ${response.status})`,
+        { cause: err },
+      );
+    }
+
+    if (response.ok) return payload as TResponse;
+
+    throw translateErrorResponse(response, payload);
+  }
+
+  /**
+   * GET a path under the configured baseUrl. No body, no Idempotency-Key —
+   * GETs are HTTP-spec-idempotent and Stripe convention scopes the header to mutations.
+   * `query` map: string/number values URL-encoded; undefined values omitted.
+   */
+  async get<TResponse>(args: {
+    pathSegments: ReadonlyArray<string>;
+    query?: Readonly<Record<string, string | number | undefined>>;
+  }): Promise<TResponse> {
+    const url = this.buildUrl(args.pathSegments) + buildQueryString(args.query);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          'User-Agent': this.userAgent,
+        },
+      });
+    } catch (err) {
       throw new BokchoyConnectionError(
         `Network request to ${url} failed: ${err instanceof Error ? err.message : String(err)}`,
         { cause: err },
@@ -127,16 +143,19 @@ export class HttpClient {
   }
 }
 
-/**
- * Convert a non-2xx Response + parsed body into the most specific error
- * class available. Dispatch is by HTTP status first, then by error.code
- * within that status — this matches the contract's Stripe-wrapped envelope
- * shape, which is HTTP-status-first / code-second. Unknown shapes fall
- * through to the generic BokchoyApiError catch-all so the caller still gets
- * status + code on `instanceof BokchoyApiError`.
- *
- * Exported for the test surface.
- */
+function buildQueryString(
+  query: Readonly<Record<string, string | number | undefined>> | undefined,
+): string {
+  if (query === undefined) return '';
+  const pairs: string[] = [];
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined) continue;
+    pairs.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+  }
+  return pairs.length === 0 ? '' : `?${pairs.join('&')}`;
+}
+
+/** Non-2xx → typed error. Dispatch by status then `error.code`; unknown shapes fall through to BokchoyApiError. */
 export function translateErrorResponse(response: Response, payload: unknown): BokchoyApiError {
   const requestId = response.headers.get('x-request-id') ?? undefined;
 
@@ -151,18 +170,13 @@ export function translateErrorResponse(response: Response, payload: unknown): Bo
 
   const { code, message } = payload.error;
 
-  // 404 UNKNOWN_CURRENCY — pull currencyCode + availableCodes per the
-  // backend's Stripe-wrapped envelope from
-  // apps/backend/src/wallet/index.ts UNKNOWN_CURRENCY branch.
   if (response.status === 404 && code === 'UNKNOWN_CURRENCY') {
     const currencyCode = readString(payload.error.currencyCode) ?? '';
     const availableCodes = readStringArray(payload.error.availableCodes) ?? [];
     return new UnknownCurrencyError({ message, requestId, currencyCode, availableCodes });
   }
 
-  // 404 UNKNOWN_PLAYER — reserved per contract Mitigation #1; not raised
-  // by current backend but the parse path is here so a future server-side
-  // change activates the SDK class without an SDK release.
+  // Reserved class — backend doesn't raise this yet but the parse path activates without an SDK release.
   if (response.status === 404 && code === 'UNKNOWN_PLAYER') {
     const playerExternalId = readString(payload.error.playerExternalId) ?? '';
     return new UnknownPlayerError({ message, requestId, playerExternalId });
