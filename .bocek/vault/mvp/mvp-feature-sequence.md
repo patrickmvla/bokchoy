@@ -1,12 +1,56 @@
 ---
 type: decision
 features: [mvp]
-related: ["[[wedge-decision]]", "[[mobile-f2p-economy-math-research]]", "[[indie-smb-pricing-research]]", "[[design-claims-register]]"]
+related: ["[[wedge-decision]]", "[[mobile-f2p-economy-math-research]]", "[[indie-smb-pricing-research]]", "[[design-claims-register]]", "[[architecture/backend-stack]]", "[[_shared/oss-sdk-only]]", "[[architecture/multi-tenant-rls-research]]", "[[marketing/v1-shape]]", "[[wallet/credit-route-contract]]", "[[wallet/balance-history-contract]]"]
 created: 2026-05-01
 confidence: medium
 ---
 
 # MVP feature sequence: 7-month linear plan with usable spine, cockpit, live-ops mechanics, and AI tooling
+
+## Amendment 2026-05-18 — Alternative B by execution; stack pivots cited
+
+**Trigger:** `/design` audit of code-vs-vault drift at day 17/90 of Month 1 surfaced three undocumented pivots. Verified findings:
+
+1. **Stack pivot (vaulted, never cited here):** Go 1.22+ monolith → TypeScript / Bun / Hono / Drizzle / Better Auth. Decision lives at `[[architecture/backend-stack]]` (2026-05-03) with same-day amendment locking in Bun + cross-runtime portability discipline + 4 named Bun-specific failure modes.
+2. **SDK order pivot (partial vault, implicit):** Unity-first → Node-first. `[[_shared/oss-sdk-only]]` (2026-05-14) names the planned four-SDK surface (`sdk-node`, `sdk-unity`, `sdk-unreal`, `sdk-godot`) without specifying order. Execution evidence: `packages/sdk-node/` is the only SDK package that exists. Unity SDK defers to post-spine.
+3. **RLS pulled forward (vault-supported, not amendment-cited):** plan said "RLS deferred past Series A"; reality is `pgPolicy('tenant_isolation', ...)` on every table from migration 0001. Per `[[architecture/multi-tenant-rls-research]]` — multi-project isolation was load-bearing from day 1.
+4. **Sequence drift:** the executed Month 1 path (HMAC API keys + Better Auth orgs + RLS + Brandur-shape idempotency + Stripe-shaped error envelope + project lifecycle + marketing apex + `@bokchoy/sdk-node`) is shape-of-Alternative-B (wedge-demo-first / thin spine + cockpit fast), not Alternative A (linear spine, gaps-non-negotiable).
+
+**Defense for B-by-execution:** the substrate is non-skippable load-bearing infrastructure. Wallet route handlers cannot be written without `apiKeyMiddleware` + `withTenant` + idempotency reaper + Stripe-shaped error envelope. The original plan budgeted substrate inline with primitive work (~10-14d per primitive). Reality: substrate consumed the first 17 days; one primitive (wallet) shipped end-to-end. **Substrate is reusable across remaining primitives** — Inventory + Catalog + Shop + IAP + Loot+Pity sit on top of the same RLS + tenancy + idempotency + transaction-kind enum (note: `transactions.kind` CHECK constraint already includes `item_grant` / `item_consume` / `compensation_grant` per `packages/db/src/schema/wallet.ts:185-186` — schema author anticipated substrate reuse).
+
+**Amended decisions:**
+
+- **Stack:** see `[[architecture/backend-stack]]` (TS / Bun / Hono / Drizzle / Better Auth).
+- **SDK sequence:** Node SDK first (shipped 2026-05-17); Unity / Unreal / Godot defer to post-spine. Per `[[_shared/oss-sdk-only]]` (planned surface) + execution evidence.
+- **RLS:** shipped from migration 0001, not deferred past Series A. Per `[[architecture/multi-tenant-rls-research]]`.
+- **Sequence: A → B-by-execution.** Substrate now done; remaining Month 1-3 resumes spine primitive work at canonical-B rate.
+- **Founder usability constraint** ("no feature stubs, no gaps") **relaxed during substrate phase** (Month 1 ships only wallet end-to-end). **Re-engages from Month 2 onward** — each subsequent primitive ships end-to-end usable.
+
+**Remaining Month 1-3 sequence (B-spine-resume per canonical B Month 1-2 minus already-shipped wallet, minus deferred Unity):**
+
+| Period | Surface shipped | Primitive count |
+|---|---|---|
+| **Day 17 → end Month 2 (~43 days)** | **Inventory ✓ LANDED 2026-05-19** (`[[inventory/inventory-contract]]` shipped per M-A item model — items + inventory tables + 2 SQL functions + 4 wrappers in new `@bokchoy/inventory` workspace + 4 backend routes + SDK extension `bokchoy.inventory.*` with 4 methods + 3 error classes + 8 unit tests + 7 smoke tests; three gates green through all 5 implementation slices). Remaining: Simple Shop (purchase route, item-grant + currency-debit composed, no bundles yet) + IAP fulfillment (Apple/Google receipt validation via `staged_jobs` worker; `iap_receipts` table already exists) + Dashboard v1 (catalog editor + transaction inspector + player search in `apps/cockpit/modules/`). | 4 primitives + SDK + dashboard (1 of 4 primitives LANDED) |
+| **Month 3 (~30 days)** | Catalog full (currencies done; add items/shops/bundles/loot_tables/pity_config schema + operator surfaces) + Loot+Pity (banners table, pity_state per (player, banner), server-authoritative RNG, loot-roll handler — `loot_rolls` audit table already exists per `packages/db/src/schema/wallet.ts:214`) | 2 primitives |
+
+**Months 4-7 unchanged from canonical B:** Months 4-5 cockpit core (A/B + segments + offer builder + live-ops calendar). Months 5-6 was "rest of spine + live-ops mechanics" — spine is finishing in Month 3 under this amendment, so Months 5-6 narrow to **live-ops mechanics only** (battle pass + quests + mailbox + faucet/drain dashboard). Month 7 AI tooling layer. Unity SDK port lands in Month 4 alongside cockpit work or Month 5 alongside live-ops.
+
+**Tightness:** 6 primitives + SDK extension + dashboard in 73 days = ~10.4 days/primitive at the plan's own rate (10-14d). Plausible but no slip buffer. Original *Failure mode* 1 ("spine slip past month 3", probability medium-high) is now load-bearing — re-budget owed at month-3 retro per the plan's own mitigation language.
+
+**Why this is defensible:**
+
+The user picked B-by-execution after the audit with defense *"substrate's reusable across the remaining primitives."* The defense is verifiable: migrations 0001–0010 are ~70% substrate / 30% wallet-specific; substrate (RLS, API keys, idempotency, error envelope, project lifecycle, transaction-kind enum) supports every remaining primitive without re-derivation. The recorded plan said Alternative B was rejected on founder pushback ("gaps are non-negotiable"); reality is gaps existed for 17 days while substrate paid down. **Pushback is preserved going forward** — Month 2 onward, each primitive ships end-to-end usable, not as stub.
+
+**Revisit-when triggers added (in addition to original):**
+
+- **Day 60 (end Month 2): if fewer than 3 of {Inventory, Simple Shop, IAP, Dashboard v1} shipped end-to-end** → spine slip is happening; either extend spine to Month 4 (compresses cockpit) or accept further gaps and ship cockpit anyway.
+- **Day 90 (end Month 3): if Loot+Pity not shipped** → gacha-shaped indie cannot use BokChoy end-to-end at Month 3 demo state; mark MVP pitch-readiness as deferred to Month 4.
+- **First design partner converts before Month 4** → renegotiate sequence with partner; pull primitives forward.
+
+**Original decision retained for historical record below per amendment-pattern precedent (cf. `[[architecture/backend-stack]]` 2026-05-03 amendment). The Decision section, table, and Reasoning that follow are the original 2026-05-01 record — the amendment above is now the operative plan.**
+
+---
 
 ## Decision
 
