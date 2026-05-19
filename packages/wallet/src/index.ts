@@ -9,7 +9,7 @@ export {
   type BootstrapProjectReasonCodesParams,
   bootstrapProjectReasonCodes,
 } from './bootstrap-project-reason-codes';
-export { type BcCode, type ErrorDetails, WalletError } from './errors';
+export { type BcCode, BcError, type ErrorDetails } from './errors';
 export {
   type WalletHistoryByExternalIdParams,
   type WalletHistoryByExternalIdResult,

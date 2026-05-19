@@ -12,18 +12,18 @@
 //   1. walletCredit happy path — wrapper returns txn id (number); wallet state matches.
 //   2. Idempotency replay — same source_event_id returns same id; wallet unchanged.
 //   3. walletDebit happy path — amount stored negative.
-//   4. BC010 InsufficientFunds — WalletError thrown, details parsed.
-//   5. BC020 TenantMismatch — WalletError thrown, gucTenant + paramTenant parsed.
-//   6. BC021 WalletNotFound — WalletError thrown, walletId + projectId parsed.
-//   7. BC022 CurrencyMismatch — WalletError thrown, walletCurrency + requested parsed.
-//   8. BC050 ReasonCodeNotRegistered — WalletError thrown via 23503 FK translation.
+//   4. BC010 InsufficientFunds — BcError thrown, details parsed.
+//   5. BC020 TenantMismatch — BcError thrown, gucTenant + paramTenant parsed.
+//   6. BC021 WalletNotFound — BcError thrown, walletId + projectId parsed.
+//   7. BC022 CurrencyMismatch — BcError thrown, walletCurrency + requested parsed.
+//   8. BC050 ReasonCodeNotRegistered — BcError thrown via 23503 FK translation.
 //   9. walletDeidentifyPlayer happy path — SKIPPED (local-docker grant gap).
 //  10. BC040 ConfigurationError — SKIPPED (same prerequisite as 9).
 //  11. bootstrapProjectReasonCodes — first call inserts 12; second call inserts 0.
 
 import { createDbClient, withTenant } from '@bokchoy/db';
 import postgres from 'postgres';
-import { bootstrapProjectReasonCodes, WalletError, walletCredit, walletDebit } from '../src/index';
+import { BcError, bootstrapProjectReasonCodes, walletCredit, walletDebit } from '../src/index';
 
 const APP_URL = process.env.DATABASE_URL;
 const MIG_URL = process.env.DATABASE_MIGRATION_URL;
@@ -178,12 +178,12 @@ async function test4_bc010_insufficient_funds() {
     );
     fail('Test 4: BC010 expected; debit succeeded');
   } catch (err) {
-    if (err instanceof WalletError && err.code === 'BC010' && err.details.code === 'BC010') {
+    if (err instanceof BcError && err.code === 'BC010' && err.details.code === 'BC010') {
       ok(
         `Test 4: BC010 InsufficientFunds — wallet=${err.details.walletId} requested=${err.details.requested} available=${err.details.available}`,
       );
     } else {
-      fail(`Test 4: expected BC010 WalletError, got ${String(err)}`);
+      fail(`Test 4: expected BC010 BcError, got ${String(err)}`);
     }
   }
 }
@@ -201,12 +201,12 @@ async function test5_bc020_tenant_mismatch() {
     );
     fail('Test 5: BC020 expected; credit succeeded');
   } catch (err) {
-    if (err instanceof WalletError && err.code === 'BC020' && err.details.code === 'BC020') {
+    if (err instanceof BcError && err.code === 'BC020' && err.details.code === 'BC020') {
       ok(
         `Test 5: BC020 TenantMismatch — guc=${err.details.gucTenant} param=${err.details.paramTenant}`,
       );
     } else {
-      fail(`Test 5: expected BC020 WalletError, got ${String(err)}`);
+      fail(`Test 5: expected BC020 BcError, got ${String(err)}`);
     }
   }
 }
@@ -225,12 +225,12 @@ async function test6_bc021_wallet_not_found() {
     );
     fail('Test 6: BC021 expected; credit succeeded');
   } catch (err) {
-    if (err instanceof WalletError && err.code === 'BC021' && err.details.code === 'BC021') {
+    if (err instanceof BcError && err.code === 'BC021' && err.details.code === 'BC021') {
       ok(
         `Test 6: BC021 WalletNotFound — walletId=${err.details.walletId} projectId=${err.details.projectId}`,
       );
     } else {
-      fail(`Test 6: expected BC021 WalletError, got ${String(err)}`);
+      fail(`Test 6: expected BC021 BcError, got ${String(err)}`);
     }
   }
 }
@@ -248,12 +248,12 @@ async function test7_bc022_currency_mismatch() {
     );
     fail('Test 7: BC022 expected; credit succeeded');
   } catch (err) {
-    if (err instanceof WalletError && err.code === 'BC022' && err.details.code === 'BC022') {
+    if (err instanceof BcError && err.code === 'BC022' && err.details.code === 'BC022') {
       ok(
         `Test 7: BC022 CurrencyMismatch — walletCurrency=${err.details.walletCurrency} requested=${err.details.requested}`,
       );
     } else {
-      fail(`Test 7: expected BC022 WalletError, got ${String(err)}`);
+      fail(`Test 7: expected BC022 BcError, got ${String(err)}`);
     }
   }
 }
@@ -273,12 +273,12 @@ async function test8_bc050_unknown_reason_code() {
     );
     fail('Test 8: BC050 expected; credit succeeded');
   } catch (err) {
-    if (err instanceof WalletError && err.code === 'BC050' && err.details.code === 'BC050') {
+    if (err instanceof BcError && err.code === 'BC050' && err.details.code === 'BC050') {
       ok(
         `Test 8: BC050 ReasonCodeNotRegistered (translated from 23503) — constraint=${err.details.constraintName}`,
       );
     } else {
-      fail(`Test 8: expected BC050 WalletError, got ${String(err)}`);
+      fail(`Test 8: expected BC050 BcError, got ${String(err)}`);
     }
   }
 }

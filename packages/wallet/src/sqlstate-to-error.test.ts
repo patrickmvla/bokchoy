@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { WalletError } from './errors';
+import { BcError } from './errors';
 import { sqlstateToError } from './sqlstate-to-error';
 
 test('BC010 InsufficientFunds parses walletId, requested, available', () => {
@@ -8,7 +8,7 @@ test('BC010 InsufficientFunds parses walletId, requested, available', () => {
     'InsufficientFunds: wallet=b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2 requested=100.0000 available=50.0000',
     undefined,
   );
-  expect(err).toBeInstanceOf(WalletError);
+  expect(err).toBeInstanceOf(BcError);
   expect(err?.code).toBe('BC010');
   if (err?.details.code === 'BC010') {
     expect(err.details.walletId).toBe('b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2');
@@ -113,4 +113,88 @@ test('23503 with no constraint name → null', () => {
 test('Unknown SQLSTATE → null', () => {
   const err = sqlstateToError('42P01', 'relation "x" does not exist', undefined);
   expect(err).toBeNull();
+});
+
+test('BC080 UnknownItem parses itemCode and projectId', () => {
+  const err = sqlstateToError(
+    'BC080',
+    'UnknownItem: code=health_potion project_id=55555555-5555-5555-5555-555555555555',
+    undefined,
+  );
+  expect(err?.code).toBe('BC080');
+  if (err?.details.code === 'BC080') {
+    expect(err.details.itemCode).toBe('health_potion');
+    expect(err.details.projectId).toBe('55555555-5555-5555-5555-555555555555');
+  }
+});
+
+test('BC081 InventoryOverflow parses current, requested, max, capacity', () => {
+  const err = sqlstateToError(
+    'BC081',
+    'InventoryOverflow: current=80 requested=50 max=100 available_capacity=20',
+    undefined,
+  );
+  expect(err?.code).toBe('BC081');
+  if (err?.details.code === 'BC081') {
+    expect(err.details.currentCount).toBe(80);
+    expect(err.details.requestedAmount).toBe(50);
+    expect(err.details.maxCount).toBe(100);
+    expect(err.details.availableCapacity).toBe(20);
+  }
+});
+
+test('BC082 InsufficientInventory (insufficient_count variant) parses current and requested', () => {
+  const err = sqlstateToError('BC082', 'InsufficientInventory: current=3 requested=5', undefined);
+  expect(err?.code).toBe('BC082');
+  if (err?.details.code === 'BC082' && err.details.variant === 'insufficient_count') {
+    expect(err.details.currentCount).toBe(3);
+    expect(err.details.requestedAmount).toBe(5);
+  } else {
+    throw new Error('expected insufficient_count variant');
+  }
+});
+
+test('BC082 instance_not_owned variant parses instanceId, playerExternalId, itemCode', () => {
+  const err = sqlstateToError(
+    'BC082',
+    'InsufficientInventory: instance=abc-uuid not owned by player=p1 for item=sword',
+    undefined,
+  );
+  expect(err?.code).toBe('BC082');
+  if (err?.details.code === 'BC082' && err.details.variant === 'instance_not_owned') {
+    expect(err.details.instanceId).toBe('abc-uuid');
+    expect(err.details.playerExternalId).toBe('p1');
+    expect(err.details.itemCode).toBe('sword');
+  } else {
+    throw new Error('expected instance_not_owned variant');
+  }
+});
+
+test('BC082 instance_id_required variant matches with no captures', () => {
+  const err = sqlstateToError(
+    'BC082',
+    'InsufficientInventory: non-stackable consume requires instance_id',
+    undefined,
+  );
+  expect(err?.code).toBe('BC082');
+  if (err?.details.code === 'BC082') {
+    expect(err.details.variant).toBe('instance_id_required');
+  } else {
+    throw new Error('expected instance_id_required variant');
+  }
+});
+
+test('BC082 player-has-no-inventory variant collapses to insufficient_count with zeros', () => {
+  const err = sqlstateToError(
+    'BC082',
+    'InsufficientInventory: player=p1 has no inventory of item=potion',
+    undefined,
+  );
+  expect(err?.code).toBe('BC082');
+  if (err?.details.code === 'BC082' && err.details.variant === 'insufficient_count') {
+    expect(err.details.currentCount).toBe(0);
+    expect(err.details.requestedAmount).toBe(0);
+  } else {
+    throw new Error('expected insufficient_count variant');
+  }
 });
