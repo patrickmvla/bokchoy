@@ -1,6 +1,6 @@
-/** Hono onError middleware. Translates WalletError + HTTPException to Stripe-wrapped JSON per [[wallet-http-contract]] G5. */
+/** Hono onError middleware. Translates BcError + HTTPException to Stripe-wrapped JSON per [[wallet-http-contract]] G5. */
 
-import { WalletError } from '@bokchoy/wallet';
+import { BcError } from '@bokchoy/wallet';
 import type { ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
@@ -25,7 +25,7 @@ const BC_TO_HTTP: Record<string, ContentfulStatusCode> = {
 };
 
 export const errorMiddleware: ErrorHandler = (err, c) => {
-  if (err instanceof WalletError) {
+  if (err instanceof BcError) {
     const status: ContentfulStatusCode = BC_TO_HTTP[err.code] ?? 500;
     const { code: _detailCode, ...detailFields } = err.details;
     return c.json(

@@ -14,6 +14,7 @@ import { type ApiKeyContext, apiKeyMiddleware } from './auth';
 import { mountCurrenciesRoutes } from './currencies';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
 import { auth, db, errorMiddleware } from './infra';
+import { mountInventoryRoutes } from './inventory';
 import { mountOrgsRoutes } from './orgs';
 import { mountProjectsRoutes } from './projects';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
@@ -77,6 +78,7 @@ mountOrgsRoutes(app);
 mountProjectsRoutes(app);
 mountCurrenciesRoutes(app);
 mountWalletRoutes(app);
+mountInventoryRoutes(app);
 
 app.onError(errorMiddleware);
 

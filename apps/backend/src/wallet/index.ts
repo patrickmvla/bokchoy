@@ -2,8 +2,8 @@
 
 import { withTenant } from '@bokchoy/db';
 import {
+  BcError,
   bootstrapProjectReasonCodes,
-  WalletError,
   walletBalanceByExternalId,
   walletCredit,
   walletCreditByExternalId,
@@ -190,7 +190,7 @@ function makeByExternalIdMutationHandler(
           return c.json(result, 201);
         } catch (err) {
           // BC060 needs handler-local 404 with availableCodes — global errorMiddleware would map it to 422.
-          if (err instanceof WalletError && err.details.code === 'BC060') {
+          if (err instanceof BcError && err.details.code === 'BC060') {
             span.recordException(err);
             span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
             const rows = await withTenant(db, projectId, async (tx) =>
