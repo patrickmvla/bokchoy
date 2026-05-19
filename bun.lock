@@ -17,6 +17,7 @@
       "dependencies": {
         "@bokchoy/auth-config": "workspace:*",
         "@bokchoy/db": "workspace:*",
+        "@bokchoy/inventory": "workspace:*",
         "@bokchoy/wallet": "workspace:*",
         "@hono/node-server": "catalog:",
         "@hono/otel": "catalog:",
@@ -95,6 +96,20 @@
       "devDependencies": {
         "@types/node": "catalog:",
         "drizzle-kit": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/inventory": {
+      "name": "@bokchoy/inventory",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bokchoy/db": "workspace:*",
+        "@bokchoy/wallet": "workspace:*",
+        "drizzle-orm": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "postgres": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -250,6 +265,8 @@
     "@bokchoy/cockpit": ["@bokchoy/cockpit@workspace:apps/cockpit"],
 
     "@bokchoy/db": ["@bokchoy/db@workspace:packages/db"],
+
+    "@bokchoy/inventory": ["@bokchoy/inventory@workspace:packages/inventory"],
 
     "@bokchoy/sdk-node": ["@bokchoy/sdk-node@workspace:packages/sdk-node"],
 
