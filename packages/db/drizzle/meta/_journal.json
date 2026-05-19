@@ -78,6 +78,20 @@
       "when": 1779038169785,
       "tag": "0010_credit_by_external_id",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779155315777,
+      "tag": "0011_inventory_primitive",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779158675212,
+      "tag": "0012_inventory_refinements",
+      "breakpoints": true
     }
   ]
 }

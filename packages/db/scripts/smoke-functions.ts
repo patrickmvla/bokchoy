@@ -32,6 +32,9 @@ const PLAYER_ID = '78787878-7878-7878-7878-787878787878';
 const CURRENCY_GEMS = '90909090-9090-9090-9090-909090909090';
 const CURRENCY_GOLD = 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1';
 const WALLET_ID = 'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2';
+// Inventory items per [[inventory/inventory-contract]] smoke coverage.
+const ITEM_POTION = 'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3';
+const ITEM_SWORD = 'd4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4';
 
 const admin = postgres(MIG_URL, { prepare: false, onnotice: () => {} });
 const app = postgres(APP_URL, { prepare: false, onnotice: () => {} });
@@ -59,6 +62,10 @@ async function setup() {
     await tx`SELECT bootstrap_project_reason_codes(${PROJECT_ID}::uuid)`;
     await tx`INSERT INTO wallets (id, project_id, player_id, currency_id, balance)
              VALUES (${WALLET_ID}, ${PROJECT_ID}, ${PLAYER_ID}, ${CURRENCY_GEMS}, 0)`;
+    // Inventory items: one stackable with max_count=10 to exercise overflow, one non-stackable.
+    await tx`INSERT INTO items (id, project_id, code, display_name, stackable, max_count) VALUES
+             (${ITEM_POTION}, ${PROJECT_ID}, 'health_potion', 'Health Potion', true, 10),
+             (${ITEM_SWORD}, ${PROJECT_ID}, 'legendary_sword', 'Legendary Sword', false, NULL)`;
   });
 }
 
@@ -66,6 +73,8 @@ async function teardown() {
   // Delete by stable scope (project_id / wallet_id) — covers original AND
   // de-identified rows since both stay scoped to PROJECT_ID after test 8.
   await admin`DELETE FROM transactions WHERE project_id = ${PROJECT_ID}`;
+  await admin`DELETE FROM inventory WHERE project_id = ${PROJECT_ID}`;
+  await admin`DELETE FROM items WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM wallets WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM reason_codes WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM currencies WHERE project_id = ${PROJECT_ID}`;
@@ -414,6 +423,252 @@ async function test13_cross_tenant_isolation_read() {
   }
 }
 
+// Inventory tests per [[inventory/inventory-contract]] cascade #11. Run BEFORE deidentify
+// because deidentify rewrites players.id, breaking the lazy-create-by-external_id JOIN.
+// All use the canonical bootstrap reason codes set up at line 60; `signup_bonus` covers item ops too.
+
+async function test14_inventory_grant_stackable_happy() {
+  const result = await withTenant(PROJECT_ID, async (tx) => {
+    const rows = await tx<
+      {
+        transaction_id: string;
+        player_id: string;
+        item_id: string;
+        stackable: boolean;
+        new_count: number | null;
+      }[]
+    >`
+      SELECT transaction_id::text, player_id, item_id, stackable, new_count
+      FROM item_grant_by_external_id(
+        ${PROJECT_ID}::uuid,
+        'smoke-ext-id'::text,
+        'health_potion'::text,
+        3::integer,
+        'signup_bonus'::text,
+        'inv-grant-evt-1'::text
+      )
+    `;
+    return rows[0];
+  });
+  if (result.stackable && result.new_count === 3 && result.item_id === ITEM_POTION) {
+    ok(`Test 14: stackable grant — new_count=3, transaction_id=${result.transaction_id}`);
+  } else {
+    fail(`Test 14: unexpected ${JSON.stringify(result)}`);
+  }
+}
+
+async function test15_inventory_grant_overflow_reject() {
+  // Item potion has max_count=10; we already granted 3 in test14. Granting 8 more
+  // would push to 11 → BC081. Verify the row is NOT mutated post-rollback.
+  try {
+    await withTenant(PROJECT_ID, async (tx) => {
+      await tx`
+        SELECT item_grant_by_external_id(
+          ${PROJECT_ID}::uuid,
+          'smoke-ext-id'::text,
+          'health_potion'::text,
+          8::integer,
+          'signup_bonus'::text,
+          'inv-grant-overflow'::text
+        )
+      `;
+    });
+    fail('Test 15: BC081 expected; grant succeeded');
+    return;
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code !== 'BC081') {
+      fail(`Test 15: expected BC081, got code=${e.code} msg=${e.message}`);
+      return;
+    }
+  }
+  // Re-read count: should still be 3 (overflow rolled back).
+  const rows = await admin<{ count: number }[]>`
+    SELECT count FROM inventory WHERE project_id = ${PROJECT_ID} AND item_id = ${ITEM_POTION} AND instance_id IS NULL
+  `;
+  if (rows.length === 1 && rows[0].count === 3) {
+    ok('Test 15: BC081 raised + rollback preserved count=3');
+  } else {
+    fail(`Test 15: rollback failed — rows=${JSON.stringify(rows)}`);
+  }
+}
+
+async function test16_inventory_grant_nonstackable_instance_ids() {
+  const result = await withTenant(PROJECT_ID, async (tx) => {
+    const rows = await tx<
+      {
+        transaction_id: string;
+        stackable: boolean;
+        new_count: number | null;
+        instance_ids: string[] | null;
+      }[]
+    >`
+      SELECT transaction_id::text, stackable, new_count, instance_ids
+      FROM item_grant_by_external_id(
+        ${PROJECT_ID}::uuid,
+        'smoke-ext-id'::text,
+        'legendary_sword'::text,
+        2::integer,
+        'signup_bonus'::text,
+        'inv-grant-sword-1'::text
+      )
+    `;
+    return rows[0];
+  });
+  if (
+    !result.stackable &&
+    result.new_count === null &&
+    Array.isArray(result.instance_ids) &&
+    result.instance_ids.length === 2
+  ) {
+    ok(
+      `Test 16: non-stackable grant — minted 2 instance UUIDs (${result.instance_ids.slice(0, 1)[0]}…)`,
+    );
+  } else {
+    fail(`Test 16: unexpected ${JSON.stringify(result)}`);
+  }
+}
+
+async function test17_inventory_consume_stackable_happy() {
+  const result = await withTenant(PROJECT_ID, async (tx) => {
+    const rows = await tx<
+      { transaction_id: string; stackable: boolean; new_count: number | null }[]
+    >`
+      SELECT transaction_id::text, stackable, new_count
+      FROM item_consume_by_external_id(
+        ${PROJECT_ID}::uuid,
+        'smoke-ext-id'::text,
+        'health_potion'::text,
+        1::integer,
+        'shop_purchase_cost'::text,
+        NULL::uuid,
+        'inv-consume-evt-1'::text
+      )
+    `;
+    return rows[0];
+  });
+  if (result.stackable && result.new_count === 2) {
+    ok(`Test 17: stackable consume — new_count=2 (was 3, consumed 1)`);
+  } else {
+    fail(`Test 17: unexpected ${JSON.stringify(result)}`);
+  }
+}
+
+async function test18_inventory_consume_insufficient_reject() {
+  // Current potion count = 2 (3 granted in test14, 1 consumed in test17).
+  // Try to consume 10 → BC082.
+  try {
+    await withTenant(PROJECT_ID, async (tx) => {
+      await tx`
+        SELECT item_consume_by_external_id(
+          ${PROJECT_ID}::uuid,
+          'smoke-ext-id'::text,
+          'health_potion'::text,
+          10::integer,
+          'shop_purchase_cost'::text,
+          NULL::uuid,
+          'inv-consume-bust'::text
+        )
+      `;
+    });
+    fail('Test 18: BC082 expected; consume succeeded');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'BC082') {
+      ok('Test 18: BC082 InsufficientInventory raised');
+    } else {
+      fail(`Test 18: expected BC082, got code=${e.code} msg=${e.message}`);
+    }
+  }
+}
+
+async function test19_inventory_list_pagination() {
+  // After tests 14-18: 1 stackable inventory row (count=2) + 2 non-stackable rows
+  // = 3 inventory rows for this player. Fetch with limit=2 → 2 rows + hasMore.
+  const firstPage = await withTenant(PROJECT_ID, async (tx) => {
+    return await tx<{ id: string; item_code: string }[]>`
+      SELECT inv.id::text, it.code AS item_code
+      FROM inventory inv
+      JOIN players p ON p.id = inv.player_id
+      JOIN items   it ON it.id = inv.item_id
+      WHERE inv.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+      ORDER BY inv.id DESC
+      LIMIT 3
+    `;
+  });
+  if (firstPage.length === 3) {
+    ok(`Test 19: list returns 3 rows (1 stackable + 2 instances) — DESC by inv.id`);
+  } else {
+    fail(`Test 19: expected 3 rows, got ${firstPage.length} — ${JSON.stringify(firstPage)}`);
+  }
+}
+
+async function test_d4_non_stackable_idempotency_replay() {
+  // Migration 0012 persists non-stackable grant instance_ids into transactions.metadata.
+  // Re-call item_grant_by_external_id with the same source_event_id used in test16 ('inv-grant-sword-1');
+  // expect SAME instance_ids returned, regardless of created_at age (no 24h heuristic).
+  const replay = await withTenant(PROJECT_ID, async (tx) => {
+    const rows = await tx<
+      {
+        transaction_id: string;
+        stackable: boolean;
+        instance_ids: string[] | null;
+      }[]
+    >`
+      SELECT transaction_id::text, stackable, instance_ids
+      FROM item_grant_by_external_id(
+        ${PROJECT_ID}::uuid,
+        'smoke-ext-id'::text,
+        'legendary_sword'::text,
+        2::integer,
+        'signup_bonus'::text,
+        'inv-grant-sword-1'::text
+      )
+    `;
+    return rows[0];
+  });
+  // Verify against persisted metadata.
+  const stored = await admin<{ metadata: { instance_ids?: string[] } }[]>`
+    SELECT metadata FROM transactions WHERE id = ${replay.transaction_id}::bigint
+  `;
+  if (
+    !replay.stackable &&
+    Array.isArray(replay.instance_ids) &&
+    replay.instance_ids.length === 2 &&
+    Array.isArray(stored[0]?.metadata?.instance_ids) &&
+    stored[0]?.metadata?.instance_ids?.length === 2
+  ) {
+    ok(
+      `Test D4: non-stackable idempotency replay reads instance_ids from transactions.metadata (persisted, not heuristic)`,
+    );
+  } else {
+    fail(
+      `Test D4: replay shape mismatch — ${JSON.stringify(replay)} stored=${JSON.stringify(stored[0])}`,
+    );
+  }
+}
+
+async function test20_inventory_cross_tenant_isolation() {
+  // Read PROJECT_ID's inventory from PROJECT_OTHER's tenant context. RLS policy on inventory
+  // filters by current_tenant GUC — JOIN returns 0 rows even though smoke-ext-id exists.
+  const rows = await withTenant(PROJECT_OTHER, async (tx) => {
+    return await tx<unknown[]>`
+      SELECT inv.id
+      FROM inventory inv
+      JOIN players p ON p.id = inv.player_id
+      WHERE inv.project_id = ${PROJECT_ID}::uuid
+        AND p.external_id = 'smoke-ext-id'
+      LIMIT 1
+    `;
+  });
+  if (rows.length === 0) {
+    ok('Test 20: cross-tenant inventory read returns 0 rows (RLS-isolated)');
+  } else {
+    fail(`Test 20: cross-tenant leak — got ${rows.length} rows from PROJECT_OTHER context`);
+  }
+}
+
 async function test8_deidentify_happy_path() {
   // Run via admin (BYPASSRLS) so we don't need to set the GUC. Set the
   // anon_secret as a transaction-local GUC.
@@ -432,13 +687,27 @@ async function test8_deidentify_happy_path() {
   const anonRow = await admin<{ player_id: string }[]>`
     SELECT DISTINCT player_id FROM transactions WHERE wallet_id = ${WALLET_ID}
   `;
-  if (original[0].count === '0' && anonRow.length === 1 && anonRow[0].player_id !== PLAYER_ID) {
+  // D5: inventory rows must also be rewritten to anon_id.
+  const inventoryOriginal = await admin<{ count: string }[]>`
+    SELECT count(*)::text AS count FROM inventory WHERE player_id = ${PLAYER_ID}
+  `;
+  const inventoryAnon = await admin<{ player_id: string }[]>`
+    SELECT DISTINCT player_id FROM inventory WHERE project_id = ${PROJECT_ID}
+  `;
+  if (
+    original[0].count === '0' &&
+    anonRow.length === 1 &&
+    anonRow[0].player_id !== PLAYER_ID &&
+    inventoryOriginal[0].count === '0' &&
+    inventoryAnon.length === 1 &&
+    inventoryAnon[0].player_id === anonRow[0].player_id
+  ) {
     ok(
-      `Test 8: deidentify replaced player_id (${result} rows touched on transactions); anon_id=${anonRow[0].player_id}`,
+      `Test 8: deidentify replaced player_id on transactions AND inventory (D5 closed); anon_id=${anonRow[0].player_id}`,
     );
   } else {
     fail(
-      `Test 8: original_count=${original[0].count} anon_rows=${JSON.stringify(anonRow)} expected 0 + single anon_id`,
+      `Test 8: txns_original=${original[0].count} txns_anon=${JSON.stringify(anonRow)} inv_original=${inventoryOriginal[0].count} inv_anon=${JSON.stringify(inventoryAnon)} (rows_touched=${result})`,
     );
   }
 }
@@ -476,6 +745,15 @@ try {
   await test11_balance_join_unknown_player();
   await test12_history_pagination_and_ordering();
   await test13_cross_tenant_isolation_read();
+  // Inventory smoke runs BEFORE deidentify (same JOIN-on-external_id constraint).
+  await test14_inventory_grant_stackable_happy();
+  await test15_inventory_grant_overflow_reject();
+  await test16_inventory_grant_nonstackable_instance_ids();
+  await test17_inventory_consume_stackable_happy();
+  await test18_inventory_consume_insufficient_reject();
+  await test19_inventory_list_pagination();
+  await test_d4_non_stackable_idempotency_replay();
+  await test20_inventory_cross_tenant_isolation();
   await test8_deidentify_happy_path();
   await test9_deidentify_missing_secret();
 } finally {
