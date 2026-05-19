@@ -1,10 +1,12 @@
 /** @module @bokchoy/sdk-node — official Node/TypeScript SDK for BokChoy wallets. */
 
+import pkg from '../package.json' with { type: 'json' };
 import { type FetchLike, HttpClient } from './http';
+import { InventoryApi } from './inventory';
 import { WalletsApi } from './wallets';
 
 const DEFAULT_BASE_URL = 'https://api.bokchoy.com';
-const SDK_VERSION = '0.0.0';
+const SDK_VERSION: string = pkg.version;
 
 export interface BokChoyConfig {
   /** Bearer API key — get one from the BokChoy cockpit. */
@@ -16,8 +18,10 @@ export interface BokChoyConfig {
 }
 
 export class BokChoy {
-  /** Wallet credit / debit operations. */
+  /** Wallet credit / debit / balance / history operations. */
   readonly wallets: WalletsApi;
+  /** Inventory grant / consume / list / get operations. */
+  readonly inventory: InventoryApi;
 
   constructor(config: BokChoyConfig) {
     if (!config.apiKey) {
@@ -31,6 +35,7 @@ export class BokChoy {
       fetchImpl,
     });
     this.wallets = new WalletsApi(http);
+    this.inventory = new InventoryApi(http);
   }
 }
 
@@ -40,8 +45,23 @@ export {
   BokchoyConnectionError,
   BokchoyError,
   BokchoyValidationError,
+  InsufficientInventoryError,
+  InventoryOverflowError,
   UnknownCurrencyError,
+  UnknownItemError,
   UnknownPlayerError,
 } from './errors';
 export type { FetchLike } from './http';
+export type {
+  InventoryConsumeParams,
+  InventoryConsumeResult,
+  InventoryGetParams,
+  InventoryGetResult,
+  InventoryGrantParams,
+  InventoryGrantResult,
+  InventoryInstance,
+  InventoryListItem,
+  InventoryListParams,
+  InventoryListResult,
+} from './inventory';
 export type { WalletMutationParams, WalletMutationResult } from './wallets';

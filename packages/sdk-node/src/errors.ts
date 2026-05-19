@@ -110,3 +110,86 @@ export class UnknownPlayerError extends BokchoyApiError {
     this.playerExternalId = args.playerExternalId;
   }
 }
+
+/** 404 UNKNOWN_ITEM — item slug not registered in the project. `availableItems` lists registered alternatives. */
+export class UnknownItemError extends BokchoyApiError {
+  readonly itemCode: string;
+  readonly availableItems: ReadonlyArray<string>;
+
+  constructor(args: {
+    message: string;
+    requestId?: string;
+    itemCode: string;
+    availableItems: ReadonlyArray<string>;
+  }) {
+    super({
+      name: 'UnknownItemError',
+      message: args.message,
+      status: 404,
+      code: 'UNKNOWN_ITEM',
+      requestId: args.requestId,
+    });
+    this.itemCode = args.itemCode;
+    this.availableItems = args.availableItems;
+  }
+}
+
+/** 422 INVENTORY_OVERFLOW — stackable grant would push count above the item's `max_count` cap. */
+export class InventoryOverflowError extends BokchoyApiError {
+  readonly currentCount: number;
+  readonly requestedAmount: number;
+  readonly maxCount: number;
+  readonly availableCapacity: number;
+
+  constructor(args: {
+    message: string;
+    requestId?: string;
+    currentCount: number;
+    requestedAmount: number;
+    maxCount: number;
+    availableCapacity: number;
+  }) {
+    super({
+      name: 'InventoryOverflowError',
+      message: args.message,
+      status: 422,
+      code: 'INVENTORY_OVERFLOW',
+      requestId: args.requestId,
+    });
+    this.currentCount = args.currentCount;
+    this.requestedAmount = args.requestedAmount;
+    this.maxCount = args.maxCount;
+    this.availableCapacity = args.availableCapacity;
+  }
+}
+
+/**
+ * 422 INSUFFICIENT_INVENTORY — consume failure. Three variants:
+ *   1. Stackable count shortage — `currentCount` + `requestedAmount` populated.
+ *   2. Non-stackable instance not owned — `instanceId` populated, counts undefined.
+ *   3. Non-stackable consume missing instanceId — all fields undefined; message carries detail.
+ */
+export class InsufficientInventoryError extends BokchoyApiError {
+  readonly currentCount?: number;
+  readonly requestedAmount?: number;
+  readonly instanceId?: string;
+
+  constructor(args: {
+    message: string;
+    requestId?: string;
+    currentCount?: number;
+    requestedAmount?: number;
+    instanceId?: string;
+  }) {
+    super({
+      name: 'InsufficientInventoryError',
+      message: args.message,
+      status: 422,
+      code: 'INSUFFICIENT_INVENTORY',
+      requestId: args.requestId,
+    });
+    this.currentCount = args.currentCount;
+    this.requestedAmount = args.requestedAmount;
+    this.instanceId = args.instanceId;
+  }
+}

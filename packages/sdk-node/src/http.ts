@@ -5,7 +5,10 @@ import {
   BokchoyAuthenticationError,
   BokchoyConnectionError,
   BokchoyValidationError,
+  InsufficientInventoryError,
+  InventoryOverflowError,
   UnknownCurrencyError,
+  UnknownItemError,
   UnknownPlayerError,
 } from './errors';
 
@@ -182,6 +185,36 @@ export function translateErrorResponse(response: Response, payload: unknown): Bo
     return new UnknownPlayerError({ message, requestId, playerExternalId });
   }
 
+  if (response.status === 404 && code === 'UNKNOWN_ITEM') {
+    const itemCode = readString(payload.error.itemCode) ?? '';
+    const availableItems = readStringArray(payload.error.availableItems) ?? [];
+    return new UnknownItemError({ message, requestId, itemCode, availableItems });
+  }
+
+  if (response.status === 422 && code === 'INVENTORY_OVERFLOW') {
+    return new InventoryOverflowError({
+      message,
+      requestId,
+      currentCount: readNumber(payload.error.currentCount) ?? 0,
+      requestedAmount: readNumber(payload.error.requestedAmount) ?? 0,
+      maxCount: readNumber(payload.error.maxCount) ?? 0,
+      availableCapacity: readNumber(payload.error.availableCapacity) ?? 0,
+    });
+  }
+
+  if (response.status === 422 && code === 'INSUFFICIENT_INVENTORY') {
+    const currentCount = readNumber(payload.error.currentCount);
+    const requestedAmount = readNumber(payload.error.requestedAmount);
+    const instanceId = readString(payload.error.instanceId);
+    return new InsufficientInventoryError({
+      message,
+      requestId,
+      ...(currentCount !== undefined ? { currentCount } : {}),
+      ...(requestedAmount !== undefined ? { requestedAmount } : {}),
+      ...(instanceId !== undefined ? { instanceId } : {}),
+    });
+  }
+
   if (response.status === 401) {
     return new BokchoyAuthenticationError({
       message,
@@ -212,6 +245,15 @@ export function translateErrorResponse(response: Response, payload: unknown): Bo
 
 function readString(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function readNumber(value: unknown): number | undefined {
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
 }
 
 function readStringArray(value: unknown): ReadonlyArray<string> | undefined {
