@@ -13,7 +13,11 @@ export type BcCode =
   | 'BC060' // CurrencyNotFound
   | 'BC080' // UnknownItem (inventory)
   | 'BC081' // InventoryOverflow
-  | 'BC082'; // InsufficientInventory
+  | 'BC082' // InsufficientInventory
+  | 'BC090' // UnknownOffer (shop)
+  | 'BC091' // OfferInactive
+  | 'BC092' // InvalidPaymentCurrency
+  | 'BC093'; // EmptyOffer (active offer with zero items)
 
 export type ErrorDetails =
   | { code: 'BC001' }
@@ -47,7 +51,12 @@ export type ErrorDetails =
       playerExternalId: string;
       itemCode: string;
     }
-  | { code: 'BC082'; variant: 'instance_id_required' };
+  | { code: 'BC082'; variant: 'instance_id_required' }
+  | { code: 'BC090'; offerCode: string; projectId: string }
+  | { code: 'BC091'; offerCode: string; projectId: string }
+  | { code: 'BC092'; variant: 'pay_with_required'; priceOptionCount: number }
+  | { code: 'BC092'; variant: 'currency_not_accepted'; currencyCode: string; offerCode: string }
+  | { code: 'BC093'; offerCode: string; projectId: string };
 
 export class BcError extends Error {
   readonly code: BcCode;

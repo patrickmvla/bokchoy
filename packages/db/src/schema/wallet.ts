@@ -165,7 +165,7 @@ export const transactions = pgTable(
       onDelete: 'restrict',
     }),
     walletVersion: bigint('wallet_version', { mode: 'number' }).notNull(),
-    itemId: bigint('item_id', { mode: 'number' }),
+    itemId: uuid('item_id'),
     itemQuantity: integer('item_quantity'),
     reasonCode: text('reason_code').notNull(),
     sourceEventId: text('source_event_id'),

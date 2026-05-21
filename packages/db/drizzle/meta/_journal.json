@@ -92,6 +92,48 @@
       "when": 1779158675212,
       "tag": "0012_inventory_refinements",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1779314887774,
+      "tag": "0013_shop_primitive",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1779357816811,
+      "tag": "0014_inventory_fn_variable_conflict",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1779358167991,
+      "tag": "0015_inventory_shop_table_grants",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1779359893184,
+      "tag": "0016_transactions_item_id_uuid",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1779360481383,
+      "tag": "0017_wallet_fn_variable_conflict",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1779362721396,
+      "tag": "0018_deidentify_full_erasure",
+      "breakpoints": true
     }
   ]
 }

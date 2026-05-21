@@ -24,6 +24,15 @@ const BC082_INSTANCE_ID_REQUIRED_RE =
 // Player-has-no-inventory variant — raised when consume targets a player with no rows for the item at all.
 const BC082_NO_INVENTORY_RE =
   /^InsufficientInventory: player=(\S+) has no inventory of item=(\S+)$/;
+// Shop format strings from packages/db/drizzle/0013_shop_primitive.sql; format-change → test fail.
+const BC090_RE = /^UnknownOffer: code=(\S+) project_id=(\S+)$/;
+const BC091_RE = /^OfferInactive: code=(\S+) project_id=(\S+)$/;
+// BC092 has two raise sites (ambiguous pay-with vs unaccepted currency) — both must parse or the raw PostgresError leaks.
+const BC092_PAY_WITH_REQUIRED_RE =
+  /^InvalidPaymentCurrency: payWith required \(offer has (\d+) price options\)$/;
+const BC092_CURRENCY_NOT_ACCEPTED_RE =
+  /^InvalidPaymentCurrency: currency=(\S+) not accepted for offer=(\S+)$/;
+const BC093_RE = /^EmptyOffer: code=(\S+) project_id=(\S+)$/;
 
 export function sqlstateToError(
   code: string,
@@ -146,6 +155,48 @@ export function sqlstateToError(
           currentCount: 0,
           requestedAmount: 0,
         };
+      }
+      break;
+    }
+    case 'BC090': {
+      const m = BC090_RE.exec(message);
+      if (m && m[1] !== undefined && m[2] !== undefined) {
+        details = { code: 'BC090', offerCode: m[1], projectId: m[2] };
+      }
+      break;
+    }
+    case 'BC091': {
+      const m = BC091_RE.exec(message);
+      if (m && m[1] !== undefined && m[2] !== undefined) {
+        details = { code: 'BC091', offerCode: m[1], projectId: m[2] };
+      }
+      break;
+    }
+    case 'BC092': {
+      const payWith = BC092_PAY_WITH_REQUIRED_RE.exec(message);
+      if (payWith && payWith[1] !== undefined) {
+        details = {
+          code: 'BC092',
+          variant: 'pay_with_required',
+          priceOptionCount: Number(payWith[1]),
+        };
+        break;
+      }
+      const notAccepted = BC092_CURRENCY_NOT_ACCEPTED_RE.exec(message);
+      if (notAccepted && notAccepted[1] !== undefined && notAccepted[2] !== undefined) {
+        details = {
+          code: 'BC092',
+          variant: 'currency_not_accepted',
+          currencyCode: notAccepted[1],
+          offerCode: notAccepted[2],
+        };
+      }
+      break;
+    }
+    case 'BC093': {
+      const m = BC093_RE.exec(message);
+      if (m && m[1] !== undefined && m[2] !== undefined) {
+        details = { code: 'BC093', offerCode: m[1], projectId: m[2] };
       }
       break;
     }

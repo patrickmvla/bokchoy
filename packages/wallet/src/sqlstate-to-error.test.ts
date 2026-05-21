@@ -198,3 +198,82 @@ test('BC082 player-has-no-inventory variant collapses to insufficient_count with
     throw new Error('expected insufficient_count variant');
   }
 });
+
+test('BC090 UnknownOffer parses offerCode and projectId', () => {
+  const err = sqlstateToError(
+    'BC090',
+    'UnknownOffer: code=starter_pack project_id=66666666-6666-6666-6666-666666666666',
+    undefined,
+  );
+  expect(err?.code).toBe('BC090');
+  if (err?.details.code === 'BC090') {
+    expect(err.details.offerCode).toBe('starter_pack');
+    expect(err.details.projectId).toBe('66666666-6666-6666-6666-666666666666');
+  } else {
+    throw new Error('expected BC090 details');
+  }
+});
+
+test('BC091 OfferInactive parses offerCode and projectId', () => {
+  const err = sqlstateToError(
+    'BC091',
+    'OfferInactive: code=starter_pack project_id=77777777-7777-7777-7777-777777777777',
+    undefined,
+  );
+  expect(err?.code).toBe('BC091');
+  if (err?.details.code === 'BC091') {
+    expect(err.details.offerCode).toBe('starter_pack');
+    expect(err.details.projectId).toBe('77777777-7777-7777-7777-777777777777');
+  } else {
+    throw new Error('expected BC091 details');
+  }
+});
+
+test('BC092 pay_with_required variant parses priceOptionCount', () => {
+  const err = sqlstateToError(
+    'BC092',
+    'InvalidPaymentCurrency: payWith required (offer has 2 price options)',
+    undefined,
+  );
+  expect(err?.code).toBe('BC092');
+  if (err?.details.code === 'BC092' && err.details.variant === 'pay_with_required') {
+    expect(err.details.priceOptionCount).toBe(2);
+  } else {
+    throw new Error('expected pay_with_required variant');
+  }
+});
+
+test('BC092 currency_not_accepted variant parses currencyCode and offerCode', () => {
+  const err = sqlstateToError(
+    'BC092',
+    'InvalidPaymentCurrency: currency=coins not accepted for offer=starter_pack',
+    undefined,
+  );
+  expect(err?.code).toBe('BC092');
+  if (err?.details.code === 'BC092' && err.details.variant === 'currency_not_accepted') {
+    expect(err.details.currencyCode).toBe('coins');
+    expect(err.details.offerCode).toBe('starter_pack');
+  } else {
+    throw new Error('expected currency_not_accepted variant');
+  }
+});
+
+test('BC092 with malformed message returns null (parse failure → re-raise)', () => {
+  const err = sqlstateToError('BC092', 'InvalidPaymentCurrency: something unexpected', undefined);
+  expect(err).toBeNull();
+});
+
+test('BC093 EmptyOffer parses offerCode and projectId', () => {
+  const err = sqlstateToError(
+    'BC093',
+    'EmptyOffer: code=starter_pack project_id=88888888-8888-8888-8888-888888888888',
+    undefined,
+  );
+  expect(err?.code).toBe('BC093');
+  if (err?.details.code === 'BC093') {
+    expect(err.details.offerCode).toBe('starter_pack');
+    expect(err.details.projectId).toBe('88888888-8888-8888-8888-888888888888');
+  } else {
+    throw new Error('expected BC093 details');
+  }
+});

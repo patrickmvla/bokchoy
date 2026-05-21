@@ -35,6 +35,14 @@ const WALLET_ID = 'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2';
 // Inventory items per [[inventory/inventory-contract]] smoke coverage.
 const ITEM_POTION = 'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3';
 const ITEM_SWORD = 'd4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4';
+// Shop offers per [[shop/shop-contract]] smoke coverage.
+const OFFER_STARTER = 'e5e5e5e5-e5e5-e5e5-e5e5-e5e5e5e5e5e5';
+const OFFER_BUNDLE = 'f6f6f6f6-f6f6-f6f6-f6f6-f6f6f6f6f6f6';
+const OFFER_OVERFLOW = '07070707-0707-0707-0707-070707070707';
+const OFFER_PRICEY = '18181818-1818-1818-1818-181818181818';
+const OFFER_DUAL = '29292929-2929-2929-2929-292929292929';
+const OFFER_RETIRED = '3a3a3a3a-3a3a-3a3a-3a3a-3a3a3a3a3a3a';
+const OFFER_EMPTY = '4b4b4b4b-4b4b-4b4b-4b4b-4b4b4b4b4b4b';
 
 const admin = postgres(MIG_URL, { prepare: false, onnotice: () => {} });
 const app = postgres(APP_URL, { prepare: false, onnotice: () => {} });
@@ -66,6 +74,34 @@ async function setup() {
     await tx`INSERT INTO items (id, project_id, code, display_name, stackable, max_count) VALUES
              (${ITEM_POTION}, ${PROJECT_ID}, 'health_potion', 'Health Potion', true, 10),
              (${ITEM_SWORD}, ${PROJECT_ID}, 'legendary_sword', 'Legendary Sword', false, NULL)`;
+    // Shop offers per [[shop/shop-contract]] smoke coverage. Offer ids by default;
+    // prices/items reference offers by code subquery (avoids more uuid constants).
+    await tx`INSERT INTO offers (id, project_id, code, display_name, active) VALUES
+             (${OFFER_STARTER}, ${PROJECT_ID}, 'starter_pack', 'Starter Pack', true),
+             (${OFFER_BUNDLE}, ${PROJECT_ID}, 'bundle_pack', 'Bundle Pack', true),
+             (${OFFER_OVERFLOW}, ${PROJECT_ID}, 'overflow_pack', 'Overflow Pack', true),
+             (${OFFER_PRICEY}, ${PROJECT_ID}, 'pricey_pack', 'Pricey Pack', true),
+             (${OFFER_DUAL}, ${PROJECT_ID}, 'dual_pack', 'Dual Pack', true),
+             (${OFFER_RETIRED}, ${PROJECT_ID}, 'retired_pack', 'Retired Pack', false),
+             (${OFFER_EMPTY}, ${PROJECT_ID}, 'empty_pack', 'Empty Pack', true)`;
+    await tx`INSERT INTO offer_prices (project_id, offer_id, currency_id, amount) VALUES
+             (${PROJECT_ID}, ${OFFER_STARTER}, ${CURRENCY_GEMS}, 10),
+             (${PROJECT_ID}, ${OFFER_BUNDLE}, ${CURRENCY_GEMS}, 10),
+             (${PROJECT_ID}, ${OFFER_OVERFLOW}, ${CURRENCY_GEMS}, 5),
+             (${PROJECT_ID}, ${OFFER_PRICEY}, ${CURRENCY_GEMS}, 1000),
+             (${PROJECT_ID}, ${OFFER_DUAL}, ${CURRENCY_GEMS}, 30),
+             (${PROJECT_ID}, ${OFFER_DUAL}, ${CURRENCY_GOLD}, 40),
+             (${PROJECT_ID}, ${OFFER_RETIRED}, ${CURRENCY_GEMS}, 10),
+             (${PROJECT_ID}, ${OFFER_EMPTY}, ${CURRENCY_GEMS}, 10)`;
+    // NOTE: empty_pack is active + priced but deliberately has NO offer_items row — exercises BC093 (testS9).
+    await tx`INSERT INTO offer_items (project_id, offer_id, item_id, quantity) VALUES
+             (${PROJECT_ID}, ${OFFER_STARTER}, ${ITEM_POTION}, 2),
+             (${PROJECT_ID}, ${OFFER_BUNDLE}, ${ITEM_POTION}, 1),
+             (${PROJECT_ID}, ${OFFER_BUNDLE}, ${ITEM_SWORD}, 1),
+             (${PROJECT_ID}, ${OFFER_OVERFLOW}, ${ITEM_POTION}, 8),
+             (${PROJECT_ID}, ${OFFER_PRICEY}, ${ITEM_POTION}, 1),
+             (${PROJECT_ID}, ${OFFER_DUAL}, ${ITEM_POTION}, 1),
+             (${PROJECT_ID}, ${OFFER_RETIRED}, ${ITEM_POTION}, 1)`;
   });
 }
 
@@ -73,6 +109,10 @@ async function teardown() {
   // Delete by stable scope (project_id / wallet_id) — covers original AND
   // de-identified rows since both stay scoped to PROJECT_ID after test 8.
   await admin`DELETE FROM transactions WHERE project_id = ${PROJECT_ID}`;
+  // Shop tables before items/currencies (FK onDelete restrict).
+  await admin`DELETE FROM offer_items WHERE project_id = ${PROJECT_ID}`;
+  await admin`DELETE FROM offer_prices WHERE project_id = ${PROJECT_ID}`;
+  await admin`DELETE FROM offers WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM inventory WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM items WHERE project_id = ${PROJECT_ID}`;
   await admin`DELETE FROM wallets WHERE project_id = ${PROJECT_ID}`;
@@ -669,6 +709,223 @@ async function test20_inventory_cross_tenant_isolation() {
   }
 }
 
+// ---------- Shop primitive (purchase_offer_by_external_id) per [[shop/shop-contract]] ----------
+// Entry state: gems balance = 70 (test1 +100, test3 -30); health_potion count = 2
+// (test14 +3, test17 -1). Idempotency replay is HTTP-middleware-owned (the SQL passes
+// source_event_id=NULL), so it is verified by the operator curl proof, NOT here.
+
+type PurchaseRow = {
+  purchase_id: string;
+  paid_currency_code: string;
+  paid_amount: string;
+  granted: { itemCode: string; quantity: number; stackable: boolean }[];
+};
+
+async function purchase(
+  offerCode: string,
+  payWith: string | null,
+  projectId: string = PROJECT_ID,
+): Promise<PurchaseRow> {
+  return await withTenant(projectId, async (tx) => {
+    const rows = await tx<PurchaseRow[]>`
+      SELECT purchase_id, paid_currency_code, paid_amount::text, granted
+      FROM purchase_offer_by_external_id(
+        ${projectId}::uuid, 'smoke-ext-id'::text, ${offerCode}::text, ${payWith}::text
+      )
+    `;
+    return rows[0];
+  });
+}
+
+async function gemsBalance(): Promise<string> {
+  const rows = await admin<
+    { balance: string }[]
+  >`SELECT balance::text FROM wallets WHERE id = ${WALLET_ID}`;
+  return rows[0]?.balance ?? 'missing';
+}
+
+async function potionCount(): Promise<number> {
+  const rows = await admin<{ count: number }[]>`
+    SELECT count FROM inventory WHERE project_id = ${PROJECT_ID} AND item_id = ${ITEM_POTION} AND instance_id IS NULL
+  `;
+  return rows[0]?.count ?? 0;
+}
+
+async function testS1_purchase_happy_single() {
+  const result = await purchase('starter_pack', 'gems');
+  const ledger = await admin<{ kind: string }[]>`
+    SELECT kind FROM transactions
+    WHERE project_id = ${PROJECT_ID} AND metadata->>'purchase_id' = ${result.purchase_id}
+    ORDER BY kind`;
+  const kinds = ledger.map((r) => r.kind);
+  const bal = await gemsBalance();
+  const potions = await potionCount();
+  if (
+    result.paid_currency_code === 'gems' &&
+    Number(result.paid_amount) === 10 &&
+    kinds.length === 2 &&
+    kinds.includes('currency_debit') &&
+    kinds.includes('item_grant') &&
+    Number(bal) === 60 &&
+    potions === 4
+  ) {
+    ok(
+      `TestS1: purchase starter_pack — 1 debit + 1 grant share purchase_id, gems 70→60, potion 2→4`,
+    );
+  } else {
+    fail(
+      `TestS1: unexpected — paid=${result.paid_amount} kinds=${JSON.stringify(kinds)} bal=${bal} potions=${potions}`,
+    );
+  }
+}
+
+async function testS2_purchase_bundle() {
+  const result = await purchase('bundle_pack', 'gems');
+  const ledger = await admin<{ kind: string }[]>`
+    SELECT kind FROM transactions
+    WHERE project_id = ${PROJECT_ID} AND metadata->>'purchase_id' = ${result.purchase_id}`;
+  const grants = ledger.filter((r) => r.kind === 'item_grant').length;
+  const debits = ledger.filter((r) => r.kind === 'currency_debit').length;
+  const bal = await gemsBalance();
+  if (result.granted.length === 2 && debits === 1 && grants === 2 && Number(bal) === 50) {
+    ok(`TestS2: bundle purchase — 1 debit + 2 grants share purchase_id (L2 ledger), gems 60→50`);
+  } else {
+    fail(
+      `TestS2: unexpected — granted=${result.granted.length} debits=${debits} grants=${grants} bal=${bal}`,
+    );
+  }
+}
+
+async function testS3_purchase_overflow_rollback() {
+  // overflow_pack grants potion x8; current potion=5 → 13 > max_count 10 → BC081, whole purchase rolls back.
+  const balBefore = await gemsBalance();
+  try {
+    await purchase('overflow_pack', 'gems');
+    fail('TestS3: BC081 expected; purchase succeeded');
+    return;
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code !== 'BC081') {
+      fail(`TestS3: expected BC081, got code=${e.code} msg=${e.message}`);
+      return;
+    }
+  }
+  const balAfter = await gemsBalance();
+  const potions = await potionCount();
+  if (balAfter === balBefore && potions === 5) {
+    ok(
+      `TestS3: grant overflow → BC081 rolls back the debit too (gems unchanged=${balAfter}, potion=5)`,
+    );
+  } else {
+    fail(
+      `TestS3: rollback failed — balBefore=${balBefore} balAfter=${balAfter} potions=${potions}`,
+    );
+  }
+}
+
+async function testS4_purchase_insufficient_funds() {
+  // pricey_pack costs 1000 gems; balance is 50 → BC010 (surfaces as INSUFFICIENT_FUNDS at HTTP).
+  const balBefore = await gemsBalance();
+  try {
+    await purchase('pricey_pack', 'gems');
+    fail('TestS4: BC010 expected; purchase succeeded');
+    return;
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code !== 'BC010') {
+      fail(`TestS4: expected BC010, got code=${e.code} msg=${e.message}`);
+      return;
+    }
+  }
+  const balAfter = await gemsBalance();
+  if (balAfter === balBefore) {
+    ok(`TestS4: insufficient funds → BC010, balance unchanged (${balAfter})`);
+  } else {
+    fail(`TestS4: balance moved on failed purchase — before=${balBefore} after=${balAfter}`);
+  }
+}
+
+async function testS5_purchase_unknown_offer() {
+  try {
+    await purchase('no_such_offer', 'gems');
+    fail('TestS5: BC090 expected; purchase succeeded');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'BC090') {
+      ok('TestS5: unknown offer → BC090');
+    } else {
+      fail(`TestS5: expected BC090, got code=${e.code} msg=${e.message}`);
+    }
+  }
+}
+
+async function testS6_purchase_offer_inactive() {
+  try {
+    await purchase('retired_pack', 'gems');
+    fail('TestS6: BC091 expected; purchase succeeded');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'BC091') {
+      ok('TestS6: inactive offer → BC091');
+    } else {
+      fail(`TestS6: expected BC091, got code=${e.code} msg=${e.message}`);
+    }
+  }
+}
+
+async function testS7_purchase_invalid_payment_currency() {
+  // dual_pack has 2 prices (gems, gold); omitting payWith is ambiguous → BC092.
+  try {
+    await purchase('dual_pack', null);
+    fail('TestS7: BC092 expected; purchase succeeded');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'BC092') {
+      ok('TestS7: multi-price offer without payWith → BC092');
+    } else {
+      fail(`TestS7: expected BC092, got code=${e.code} msg=${e.message}`);
+    }
+  }
+}
+
+async function testS8_purchase_cross_tenant_isolation() {
+  // PROJECT_OTHER tenant cannot resolve PROJECT_ID's offer — RLS hides it → BC090.
+  try {
+    await purchase('starter_pack', 'gems', PROJECT_OTHER);
+    fail('TestS8: BC090 expected; cross-tenant purchase succeeded');
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code === 'BC090') {
+      ok('TestS8: cross-tenant purchase of PROJECT_ID offer → BC090 (RLS-isolated)');
+    } else {
+      fail(`TestS8: expected BC090, got code=${e.code} msg=${e.message}`);
+    }
+  }
+}
+
+async function testS9_purchase_empty_offer_backstop() {
+  // empty_pack is active + priced (10 gems) but has zero offer_items → BC093, raised pre-debit.
+  // Per [[shop/contract-reconciliation-2026-05-21]] D1 — the "charged got nothing" backstop.
+  const balBefore = await gemsBalance();
+  try {
+    await purchase('empty_pack', 'gems');
+    fail('TestS9: BC093 expected; empty-offer purchase succeeded');
+    return;
+  } catch (err) {
+    const e = err as Error & { code?: string };
+    if (e.code !== 'BC093') {
+      fail(`TestS9: expected BC093, got code=${e.code} msg=${e.message}`);
+      return;
+    }
+  }
+  const balAfter = await gemsBalance();
+  if (balAfter === balBefore) {
+    ok(`TestS9: empty offer → BC093 raised pre-debit, balance unchanged (${balAfter})`);
+  } else {
+    fail(`TestS9: balance moved on empty-offer purchase — before=${balBefore} after=${balAfter}`);
+  }
+}
+
 async function test8_deidentify_happy_path() {
   // Run via admin (BYPASSRLS) so we don't need to set the GUC. Set the
   // anon_secret as a transaction-local GUC.
@@ -680,34 +937,53 @@ async function test8_deidentify_happy_path() {
     `;
     return rows[0].rows_touched;
   });
-  // After deidentify, the transactions player_id should no longer match PLAYER_ID.
-  const original = await admin<{ count: string }[]>`
-    SELECT count(*)::text AS count FROM transactions WHERE player_id = ${PLAYER_ID}
+  // Full erasure per [[wallet/deidentify-full-erasure]]: the original PLAYER_ID must appear in NO
+  // player-referencing table; the players identity row becomes the anon row (PII null); wallets +
+  // inventory + transactions all repoint to the SAME anon_id.
+  const originalRefs = await admin<{ tbl: string; n: string }[]>`
+    SELECT 'players'      AS tbl, count(*)::text AS n FROM players      WHERE id        = ${PLAYER_ID}
+    UNION ALL SELECT 'wallets',      count(*)::text FROM wallets      WHERE player_id = ${PLAYER_ID}
+    UNION ALL SELECT 'inventory',    count(*)::text FROM inventory    WHERE player_id = ${PLAYER_ID}
+    UNION ALL SELECT 'transactions', count(*)::text FROM transactions WHERE player_id = ${PLAYER_ID}
+    UNION ALL SELECT 'loot_rolls',   count(*)::text FROM loot_rolls   WHERE player_id = ${PLAYER_ID}
+    UNION ALL SELECT 'iap_receipts', count(*)::text FROM iap_receipts WHERE player_id = ${PLAYER_ID}
   `;
-  const anonRow = await admin<{ player_id: string }[]>`
-    SELECT DISTINCT player_id FROM transactions WHERE wallet_id = ${WALLET_ID}
+  const anyOriginal = originalRefs.filter((r) => r.n !== '0');
+  // anon_id = whoever the gems wallet now points to (wallets repoint is the NEW behavior).
+  const walletAnon = await admin<
+    { player_id: string }[]
+  >`SELECT player_id FROM wallets WHERE id = ${WALLET_ID}`;
+  const anonId = walletAnon[0]?.player_id;
+  // anon players identity row exists with PII scrubbed.
+  const anonPlayer = await admin<
+    { id: string; email: string | null; external_id: string | null }[]
+  >`
+    SELECT id, email, external_id FROM players WHERE id = ${anonId ?? null}
   `;
-  // D5: inventory rows must also be rewritten to anon_id.
-  const inventoryOriginal = await admin<{ count: string }[]>`
-    SELECT count(*)::text AS count FROM inventory WHERE player_id = ${PLAYER_ID}
-  `;
-  const inventoryAnon = await admin<{ player_id: string }[]>`
-    SELECT DISTINCT player_id FROM inventory WHERE project_id = ${PROJECT_ID}
-  `;
+  const invAnon = await admin<
+    { player_id: string }[]
+  >`SELECT DISTINCT player_id FROM inventory WHERE project_id = ${PROJECT_ID}`;
+  const txnAnon = await admin<
+    { player_id: string }[]
+  >`SELECT DISTINCT player_id FROM transactions WHERE wallet_id = ${WALLET_ID}`;
   if (
-    original[0].count === '0' &&
-    anonRow.length === 1 &&
-    anonRow[0].player_id !== PLAYER_ID &&
-    inventoryOriginal[0].count === '0' &&
-    inventoryAnon.length === 1 &&
-    inventoryAnon[0].player_id === anonRow[0].player_id
+    anyOriginal.length === 0 &&
+    anonId !== undefined &&
+    anonId !== PLAYER_ID &&
+    anonPlayer.length === 1 &&
+    anonPlayer[0].email === null &&
+    anonPlayer[0].external_id === null &&
+    invAnon.length === 1 &&
+    invAnon[0].player_id === anonId &&
+    txnAnon.length === 1 &&
+    txnAnon[0].player_id === anonId
   ) {
     ok(
-      `Test 8: deidentify replaced player_id on transactions AND inventory (D5 closed); anon_id=${anonRow[0].player_id}`,
+      `Test 8: full erasure — original player_id gone from all 6 tables; players row anonymized (PII null); wallets+inventory+transactions → anon_id=${anonId}`,
     );
   } else {
     fail(
-      `Test 8: txns_original=${original[0].count} txns_anon=${JSON.stringify(anonRow)} inv_original=${inventoryOriginal[0].count} inv_anon=${JSON.stringify(inventoryAnon)} (rows_touched=${result})`,
+      `Test 8: anyOriginal=${JSON.stringify(anyOriginal)} anonId=${anonId} anonPlayer=${JSON.stringify(anonPlayer)} invAnon=${JSON.stringify(invAnon)} txnAnon=${JSON.stringify(txnAnon)} (rows_touched=${result})`,
     );
   }
 }
@@ -754,6 +1030,17 @@ try {
   await test19_inventory_list_pagination();
   await test_d4_non_stackable_idempotency_replay();
   await test20_inventory_cross_tenant_isolation();
+
+  await testS1_purchase_happy_single();
+  await testS2_purchase_bundle();
+  await testS3_purchase_overflow_rollback();
+  await testS4_purchase_insufficient_funds();
+  await testS5_purchase_unknown_offer();
+  await testS6_purchase_offer_inactive();
+  await testS7_purchase_invalid_payment_currency();
+  await testS8_purchase_cross_tenant_isolation();
+  await testS9_purchase_empty_offer_backstop();
+
   await test8_deidentify_happy_path();
   await test9_deidentify_missing_secret();
 } finally {
