@@ -629,4 +629,27 @@ For G11.10 (SDK signature):
 
 ---
 
-## Summary (updated 2026-05-18 — 11 gaps total, gaps 1–7 resolved 2026-05-04; gap 8 deferred-and-downgraded; gap 9 RESOLVED 2026-05-09 via `[[wallet-http-contract]]`; gap 10 RESOLVED 2026-05-10 via `[[direct-mutation-lint-opt-out-shape]]`; gap 11 OPEN — `/design` recommended for `[[wallet/balance-history-contract]]`)
+## GAP 12 (surfaced 2026-05-21, first live smoke run — debugging): `wallet_deidentify_player` repoint strategy breaks on FK-constrained tables
+
+**Surfaced:** first-ever live run of `scripts/smoke-functions.ts` (test8), debugging session per `[[wallet/discovery-inventory-sql-never-run]]` bug #6.
+
+**Failure trace:** `wallet_deidentify_player(p_player_id)` (0012, D5 rewrite) computes `anon_id = hmac(player_id, secret)` then `UPDATE <table> SET player_id = anon_id WHERE player_id = p_player_id` across `transactions`, `loot_rolls`, `iap_receipts`, `inventory`, `staged_jobs`. The `transactions` update succeeds (audit log, no FK to `players`). The **`inventory` update fails**: `inventory.player_id` has FK `inventory_player_id_players_id_fk → players.id`, and `anon_id` is not a `players` row → `23503 violates foreign key constraint`. The function never creates/renames a `players` row to `anon_id`.
+
+**Broken assumption (incorrect-assumption classification, NOT a mechanical fix):** the D5 decision assumed every player-referencing table could be repointed to a free-floating `anon_id`, as the audit/log tables (`transactions`/`loot_rolls`/`iap_receipts` — no enforced `players` FK) can. That fails for **live FK-constrained tables** — `inventory` references `players.id`. (Latent: `loot_rolls`/`iap_receipts` updates touched 0 rows in the smoke fixture, so their FK-under-data status is untested — same bug if either carries a `players` FK.)
+
+**Resolution is a strategy choice (design's call):**
+- **(a) Scrub-in-place** (lean): keep `players.id`, null/hash the PII columns on the `players` row itself; do NOT repoint `inventory`. Referential integrity preserved, inventory ownership stays valid. Standard GDPR shape; would coexist with the audit-log repoints.
+- **(b) PK-rename-with-cascade:** `UPDATE players SET id = anon_id` with `ON UPDATE CASCADE` on every `players` FK → references follow; per-table repoints become redundant. Requires auditing/altering every FK.
+- **(c) Insert-anon-player-row** then repoint. Leaves an orphan anon player row; messiest.
+
+**Why not fixed in debugging:** per the debugging primitive, broken-assumption/design-flaw → `/design`, not a debugging-seat patch. Choosing (a)/(b)/(c) for the DSR/GDPR path on the core `players` identity + the audit-vs-live-table split intersects `[[inventory/inventory-contract]]`. Smoke test8/test9 stay red until resolved.
+
+**To resolve:** `/design` — pick the deidentify strategy for FK-constrained tables, then `/implementation` ships `CREATE OR REPLACE wallet_deidentify_player` (new migration) + re-runs smoke to green test8/9.
+
+### GAP 12 RESOLVED 2026-05-21 — `[[wallet/deidentify-full-erasure]]` LANDED (design)
+
+Reframed in /design: the function was never just FK-broken — it was **incomplete** (only ever anonymized the audit trail; never touched the `players` identity row or `wallets`), and the D5 inventory clause was a category error (live FK-constrained state in an audit-anonymization fn). **Human decided (2026-05-21): full player erasure, anonymize-retain for live state.** `wallet_deidentify_player` is redesigned to extend the §6 deterministic-`anon_id` model uniformly: end state = original `player_id` in NO table, `anon_id` the sole identifier everywhere, all PII scrubbed (`players.external_id`/`email` NULL), `players` becomes the anon identity; key-destruction = erasure (unchanged). Adds the missing `wallets` repoint; keeps inventory repoint (now FK-valid because the anon identity is materialized first). Implementation enumerates every `players.id` FK + adds a post-erasure zero-original-`player_id` assertion. → `/implementation` ships a new migration + greens test8/9 against the live DB.
+
+---
+
+## Summary (updated 2026-05-21 — 12 gaps; gaps 1–7 resolved 2026-05-04; gap 8 deferred-and-downgraded; gap 9 RESOLVED 2026-05-09 via `[[wallet-http-contract]]`; gap 10 RESOLVED 2026-05-10 via `[[direct-mutation-lint-opt-out-shape]]`; gap 11 RESOLVED 2026-05-18 via `[[wallet/balance-history-contract]]`; **gap 12 RESOLVED 2026-05-21 via `[[wallet/deidentify-full-erasure]]` — full player erasure, anonymize-retain; awaits /implementation**)

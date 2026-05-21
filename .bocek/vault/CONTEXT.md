@@ -87,6 +87,11 @@ A per-Project catalog row describing a single ownable thing (e.g. `health_potion
 → see [[inventory/inventory-contract]]
 _Avoid_: "slug" as a field name (acceptable in prose), "asset" (LootLocker term — Item is the BokChoy convention)
 
+**Shop:**
+The commerce primitive (next spine primitive after Wallet + Inventory) that composes a Currency spend + an Item grant into one atomic purchase. A Shop sells a *priced purchasable unit* (the offer/listing/SKU), not a bare Item — price never lives as a scalar column on the Item itself (per game-economy SDK class; see research). Distinct primitive from Wallet and Inventory. Real-money / IAP is a separate primitive, NOT part of Shop.
+→ see [[shop/.research/pricing-locus-research]]
+_Avoid_: "store" (overloads cockpit UI + Postgres; "Shop" is the BokChoy primitive term), "IAP" (real-money is its own primitive)
+
 ### Operational primitives
 
 **External ID:**
