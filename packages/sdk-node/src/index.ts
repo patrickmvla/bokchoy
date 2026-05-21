@@ -3,6 +3,7 @@
 import pkg from '../package.json' with { type: 'json' };
 import { type FetchLike, HttpClient } from './http';
 import { InventoryApi } from './inventory';
+import { ShopApi } from './shop';
 import { WalletsApi } from './wallets';
 
 const DEFAULT_BASE_URL = 'https://api.bokchoy.com';
@@ -22,6 +23,8 @@ export class BokChoy {
   readonly wallets: WalletsApi;
   /** Inventory grant / consume / list / get operations. */
   readonly inventory: InventoryApi;
+  /** Shop purchase + offer catalog operations. */
+  readonly shop: ShopApi;
 
   constructor(config: BokChoyConfig) {
     if (!config.apiKey) {
@@ -36,6 +39,7 @@ export class BokChoy {
     });
     this.wallets = new WalletsApi(http);
     this.inventory = new InventoryApi(http);
+    this.shop = new ShopApi(http);
   }
 }
 
@@ -45,10 +49,15 @@ export {
   BokchoyConnectionError,
   BokchoyError,
   BokchoyValidationError,
+  InsufficientFundsError,
   InsufficientInventoryError,
+  InvalidPaymentCurrencyError,
   InventoryOverflowError,
+  OfferInactiveError,
+  OfferMisconfiguredError,
   UnknownCurrencyError,
   UnknownItemError,
+  UnknownOfferError,
   UnknownPlayerError,
 } from './errors';
 export type { FetchLike } from './http';
@@ -64,4 +73,12 @@ export type {
   InventoryListParams,
   InventoryListResult,
 } from './inventory';
+export type {
+  PurchaseGrantedItem,
+  PurchaseParams,
+  PurchaseResult,
+  ShopOffer,
+  ShopOfferItem,
+  ShopOfferPrice,
+} from './shop';
 export type { WalletMutationParams, WalletMutationResult } from './wallets';

@@ -193,3 +193,97 @@ export class InsufficientInventoryError extends BokchoyApiError {
     this.instanceId = args.instanceId;
   }
 }
+
+/** 422 INSUFFICIENT_FUNDS — debit/purchase failed because the wallet balance is too low. Amounts are NUMERIC strings. */
+export class InsufficientFundsError extends BokchoyApiError {
+  readonly walletId?: string;
+  readonly requested?: string;
+  readonly available?: string;
+
+  constructor(args: {
+    message: string;
+    requestId?: string;
+    walletId?: string;
+    requested?: string;
+    available?: string;
+  }) {
+    super({
+      name: 'InsufficientFundsError',
+      message: args.message,
+      status: 422,
+      code: 'INSUFFICIENT_FUNDS',
+      requestId: args.requestId,
+    });
+    this.walletId = args.walletId;
+    this.requested = args.requested;
+    this.available = args.available;
+  }
+}
+
+/** 404 UNKNOWN_OFFER — offer code not registered in the project. Offer codes are not enumerated (unlike currencies). */
+export class UnknownOfferError extends BokchoyApiError {
+  readonly offerCode: string;
+
+  constructor(args: { message: string; requestId?: string; offerCode: string }) {
+    super({
+      name: 'UnknownOfferError',
+      message: args.message,
+      status: 404,
+      code: 'UNKNOWN_OFFER',
+      requestId: args.requestId,
+    });
+    this.offerCode = args.offerCode;
+  }
+}
+
+/** 422 OFFER_INACTIVE — the offer exists but is not currently purchasable (`active = false`). */
+export class OfferInactiveError extends BokchoyApiError {
+  readonly offerCode: string;
+
+  constructor(args: { message: string; requestId?: string; offerCode: string }) {
+    super({
+      name: 'OfferInactiveError',
+      message: args.message,
+      status: 422,
+      code: 'OFFER_INACTIVE',
+      requestId: args.requestId,
+    });
+    this.offerCode = args.offerCode;
+  }
+}
+
+/** 422 INVALID_PAYMENT_CURRENCY — `payWith` was omitted on a multi-price offer, or names a currency not in the offer's price-set. `acceptedCurrencies` lists the valid choices. */
+export class InvalidPaymentCurrencyError extends BokchoyApiError {
+  readonly acceptedCurrencies: ReadonlyArray<string>;
+
+  constructor(args: {
+    message: string;
+    requestId?: string;
+    acceptedCurrencies: ReadonlyArray<string>;
+  }) {
+    super({
+      name: 'InvalidPaymentCurrencyError',
+      message: args.message,
+      status: 422,
+      code: 'INVALID_PAYMENT_CURRENCY',
+      requestId: args.requestId,
+    });
+    this.acceptedCurrencies = args.acceptedCurrencies;
+  }
+}
+
+/** 422 OFFER_MISCONFIGURED — the offer is active and priced but has no items; the operator must fix it. The purchase was rejected before any charge. */
+export class OfferMisconfiguredError extends BokchoyApiError {
+  readonly offerCode: string;
+
+  constructor(args: { message: string; requestId?: string; offerCode: string }) {
+    super({
+      name: 'OfferMisconfiguredError',
+      message: args.message,
+      status: 422,
+      code: 'OFFER_MISCONFIGURED',
+      requestId: args.requestId,
+    });
+    this.offerCode = args.offerCode;
+  }
+}

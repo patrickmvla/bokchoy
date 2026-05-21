@@ -5,10 +5,15 @@ import {
   BokchoyAuthenticationError,
   BokchoyConnectionError,
   BokchoyValidationError,
+  InsufficientFundsError,
   InsufficientInventoryError,
+  InvalidPaymentCurrencyError,
   InventoryOverflowError,
+  OfferInactiveError,
+  OfferMisconfiguredError,
   UnknownCurrencyError,
   UnknownItemError,
+  UnknownOfferError,
   UnknownPlayerError,
 } from './errors';
 
@@ -202,6 +207,19 @@ export function translateErrorResponse(response: Response, payload: unknown): Bo
     });
   }
 
+  if (response.status === 422 && code === 'INSUFFICIENT_FUNDS') {
+    const walletId = readString(payload.error.walletId);
+    const requested = readString(payload.error.requested);
+    const available = readString(payload.error.available);
+    return new InsufficientFundsError({
+      message,
+      requestId,
+      ...(walletId !== undefined ? { walletId } : {}),
+      ...(requested !== undefined ? { requested } : {}),
+      ...(available !== undefined ? { available } : {}),
+    });
+  }
+
   if (response.status === 422 && code === 'INSUFFICIENT_INVENTORY') {
     const currentCount = readNumber(payload.error.currentCount);
     const requestedAmount = readNumber(payload.error.requestedAmount);
@@ -213,6 +231,26 @@ export function translateErrorResponse(response: Response, payload: unknown): Bo
       ...(requestedAmount !== undefined ? { requestedAmount } : {}),
       ...(instanceId !== undefined ? { instanceId } : {}),
     });
+  }
+
+  if (response.status === 404 && code === 'UNKNOWN_OFFER') {
+    const offerCode = readString(payload.error.offerCode) ?? '';
+    return new UnknownOfferError({ message, requestId, offerCode });
+  }
+
+  if (response.status === 422 && code === 'OFFER_INACTIVE') {
+    const offerCode = readString(payload.error.offerCode) ?? '';
+    return new OfferInactiveError({ message, requestId, offerCode });
+  }
+
+  if (response.status === 422 && code === 'INVALID_PAYMENT_CURRENCY') {
+    const acceptedCurrencies = readStringArray(payload.error.acceptedCurrencies) ?? [];
+    return new InvalidPaymentCurrencyError({ message, requestId, acceptedCurrencies });
+  }
+
+  if (response.status === 422 && code === 'OFFER_MISCONFIGURED') {
+    const offerCode = readString(payload.error.offerCode) ?? '';
+    return new OfferMisconfiguredError({ message, requestId, offerCode });
   }
 
   if (response.status === 401) {

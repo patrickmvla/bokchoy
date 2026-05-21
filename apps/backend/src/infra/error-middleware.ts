@@ -24,6 +24,12 @@ const BC_TO_HTTP: Record<string, ContentfulStatusCode> = {
   BC405: 403,
 };
 
+// Friendly wire codes for errors surfaced to SDK customers (vs the raw BCxxx). Single source
+// of truth so the wallet /debit route and shop /purchases both emit INSUFFICIENT_FUNDS for BC010.
+const BC_FRIENDLY_CODE: Record<string, string> = {
+  BC010: 'INSUFFICIENT_FUNDS',
+};
+
 export const errorMiddleware: ErrorHandler = (err, c) => {
   if (err instanceof BcError) {
     const status: ContentfulStatusCode = BC_TO_HTTP[err.code] ?? 500;
@@ -31,7 +37,7 @@ export const errorMiddleware: ErrorHandler = (err, c) => {
     return c.json(
       {
         error: {
-          code: err.code,
+          code: BC_FRIENDLY_CODE[err.code] ?? err.code,
           message: err.message,
           ...detailFields,
         },

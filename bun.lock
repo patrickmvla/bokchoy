@@ -18,6 +18,7 @@
         "@bokchoy/auth-config": "workspace:*",
         "@bokchoy/db": "workspace:*",
         "@bokchoy/inventory": "workspace:*",
+        "@bokchoy/shop": "workspace:*",
         "@bokchoy/wallet": "workspace:*",
         "@hono/node-server": "catalog:",
         "@hono/otel": "catalog:",
@@ -125,6 +126,20 @@
       "name": "@bokchoy/shared-types",
       "version": "0.0.0",
       "devDependencies": {
+        "typescript": "catalog:",
+      },
+    },
+    "packages/shop": {
+      "name": "@bokchoy/shop",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bokchoy/db": "workspace:*",
+        "@bokchoy/wallet": "workspace:*",
+        "drizzle-orm": "catalog:",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "postgres": "catalog:",
         "typescript": "catalog:",
       },
     },
@@ -271,6 +286,8 @@
     "@bokchoy/sdk-node": ["@bokchoy/sdk-node@workspace:packages/sdk-node"],
 
     "@bokchoy/shared-types": ["@bokchoy/shared-types@workspace:packages/shared-types"],
+
+    "@bokchoy/shop": ["@bokchoy/shop@workspace:packages/shop"],
 
     "@bokchoy/wallet": ["@bokchoy/wallet@workspace:packages/wallet"],
 

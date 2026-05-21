@@ -17,6 +17,7 @@ import { auth, db, errorMiddleware } from './infra';
 import { mountInventoryRoutes } from './inventory';
 import { mountOrgsRoutes } from './orgs';
 import { mountProjectsRoutes } from './projects';
+import { mountShopRoutes } from './shop';
 import { SERVICE_NAME, SERVICE_VERSION } from './telemetry';
 import { mountWalletRoutes } from './wallet';
 
@@ -79,6 +80,7 @@ mountProjectsRoutes(app);
 mountCurrenciesRoutes(app);
 mountWalletRoutes(app);
 mountInventoryRoutes(app);
+mountShopRoutes(app);
 
 app.onError(errorMiddleware);
 

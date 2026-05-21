@@ -4,6 +4,7 @@ import {
   BokchoyAuthenticationError,
   BokchoyConnectionError,
   BokchoyValidationError,
+  InsufficientFundsError,
   UnknownCurrencyError,
   UnknownPlayerError,
 } from './errors';
@@ -194,20 +195,35 @@ describe('translateErrorResponse', () => {
     }
   });
 
-  test('422 BC010 → generic BokchoyApiError (dispatch by .code)', () => {
+  test('422 INSUFFICIENT_FUNDS → InsufficientFundsError with walletId/requested/available', () => {
     const response = new Response(null, { status: 422 });
     const err = translateErrorResponse(response, {
       error: {
-        code: 'BC010',
+        code: 'INSUFFICIENT_FUNDS',
         message: 'InsufficientFunds',
         walletId: 'wallet-uuid',
         requested: '100.0000',
         available: '50.0000',
       },
     });
+    expect(err).toBeInstanceOf(InsufficientFundsError);
+    expect(err.code).toBe('INSUFFICIENT_FUNDS');
+    expect(err.status).toBe(422);
+    if (err instanceof InsufficientFundsError) {
+      expect(err.walletId).toBe('wallet-uuid');
+      expect(err.requested).toBe('100.0000');
+      expect(err.available).toBe('50.0000');
+    }
+  });
+
+  test('422 with unmapped BC code → generic BokchoyApiError (dispatch by .code)', () => {
+    const response = new Response(null, { status: 422 });
+    const err = translateErrorResponse(response, {
+      error: { code: 'BC050', message: 'ReasonCodeNotRegistered' },
+    });
     expect(err).toBeInstanceOf(BokchoyApiError);
     expect(err).not.toBeInstanceOf(UnknownCurrencyError);
-    expect(err.code).toBe('BC010');
+    expect(err.code).toBe('BC050');
     expect(err.status).toBe(422);
   });
 
