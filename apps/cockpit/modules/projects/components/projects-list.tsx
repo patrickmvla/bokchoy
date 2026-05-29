@@ -49,7 +49,7 @@ export function ProjectsList() {
 function ProjectCard({ project }: { project: Project }) {
   return (
     <Link
-      href={`/projects/${project.id}`}
+      href={`/project/${project.id}`}
       className="group block focus:outline-none"
     >
       <Card className="h-full transition-colors hover:border-foreground/20">

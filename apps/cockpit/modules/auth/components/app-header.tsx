@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { authClient } from '@/lib/auth-client';
 import { userMessage } from '@/lib/error-messages';
+import { ProjectSwitcher } from '@/modules/projects/components/project-switcher';
 import { useOrgMe } from '../hooks/use-org-me';
 
 interface AppHeaderProps {
@@ -54,6 +55,7 @@ export function AppHeader({ userEmail }: AppHeaderProps) {
               </span>
             </span>
           ) : null}
+          <ProjectSwitcher />
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden sm:inline truncate text-sm text-muted-foreground">

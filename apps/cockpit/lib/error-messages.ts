@@ -9,6 +9,21 @@ const KNOWN_CODES: Record<string, string> = {
 
   VALIDATION_ERROR: 'Please check the form fields and try again.',
 
+  // Catalog admin per [[cockpit/admin-catalog-endpoints-contract]]. RESOURCE_IN_USE is rendered
+  // with its structured detail by the delete dialogs; this is the fallback line.
+  CODE_TAKEN:
+    'That code is already used in this project. Pick a different one.',
+  IMMUTABLE_FIELD:
+    'That field cannot be changed after creation. Create a new entry instead.',
+  RESOURCE_IN_USE:
+    'This is referenced by other catalog entries and cannot be deleted yet.',
+  OFFER_MISCONFIGURED:
+    'An active offer needs at least one price and at least one item. Add them or keep the offer inactive.',
+  UNKNOWN_CURRENCY:
+    'One of the selected currencies no longer exists. Refresh and try again.',
+  UNKNOWN_ITEM:
+    'One of the selected items no longer exists. Refresh and try again.',
+
   BC401: 'Your session has expired. Please sign in again.',
   BC400: 'Missing organization context. Try signing out and back in.',
   BC402: 'Request rejected — invalid identifier in the URL.',
