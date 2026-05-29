@@ -1,12 +1,38 @@
 ---
 type: decision
 features: [cockpit, mvp]
-related: ["[[cockpit-stack-integration-research]]", "[[admin-auth-surface]]", "[[backend-stack]]", "[[frontend-stack]]", "[[mvp-feature-sequence]]", "[[backend-service-shape]]"]
+related: ["[[cockpit-stack-integration-research]]", "[[admin-auth-surface]]", "[[backend-stack]]", "[[frontend-stack]]", "[[mvp-feature-sequence]]", "[[backend-service-shape]]", "[[catalog-mutation-mvp-shape]]"]
 created: 2026-05-11
 confidence: high
 ---
 
 # Cockpit MVP scope, IA, project lifecycle, success criteria, and non-goals
+
+## Amendment 2026-05-28 — Slice 8.5 catalog editor scope reconciled to currencies + items + offers (drops shops/bundles/loot tables)
+
+(M2)'s catalog editor scope item — *"currencies, items, shops, bundles, loot tables"* — was vaulted 2026-05-11 BEFORE Inventory and Shop primitives were designed. Reconciliation to the primitives that actually shipped:
+
+- **currencies** — exists, kept. (Wallet primitive per [[wallet/credit-route-contract]].)
+- **items** — exists, kept. (Inventory primitive per [[inventory/inventory-contract]].)
+- **shops** — renamed to **offers**. Shop primitive landed as the priced unit `offers` (not "storefronts") per [[shop/shop-contract]] B1b. The cockpit-shape (M2) term "shops" refers to what now ships as `offers`/`offer_prices`/`offer_items`.
+- **bundles** — subsumed into offers (a multi-`offer_items` offer IS a bundle per [[shop/shop-contract]] (ii) + (iv)). No separate bundle editor surface owed.
+- **loot tables** — NOT shipped, NOT designed. Stay deferred per [[catalog-mutation-mvp-shape]] (viii) + [[architecture/catalog-cac-upgrade]] F5-reframing-amendment. When a customer asks, the design seat picks T3-style config-as-code (Hiro shape) or T1+T2 catalog-versioning-style — not pre-committed here.
+
+**Reconciled Slice 8.5 catalog editor scope at MVP = currencies + items + offers (3 editors, not 5).**
+
+The "M2 stored-function calls per [[catalog-versioning]]" framing in the Slice sequencing block is **also amended** as of 2026-05-28: catalog mutation at MVP is plain CRUD via Drizzle direct INSERT/UPDATE/DELETE per [[catalog-mutation-mvp-shape]] (i) + (v). The M2 stored-function-only-interface stays scoped to the wallet/inventory/shop SQL functions where it's load-bearing for ledger conservation; it does NOT extend to catalog mutation. The original Slice 8.5 sequencing reference *"catalog editor CRUD via M2 stored-functions per [[catalog-versioning]]"* should read as *"catalog editor CRUD per [[catalog-mutation-mvp-shape]]"* going forward.
+
+Editor invariants the Slice 8.5 implementation MUST honor (per [[catalog-mutation-mvp-shape]] (vi)+(vii)):
+- **BC093 activation invariant on offers:** the offer editor blocks toggling `active=true` unless `≥1 offer_items AND ≥1 offer_prices`. Inline guidance UX. BC093 stays as the SQL backstop.
+- **Restrict-FK delete-block UX:** the editor handler enumerates referencing rows on FK-restrict-violation and surfaces *"`<resource>` is referenced by `<list>`; remove these first"* — NOT a generic 422 with raw constraint name.
+
+**What does NOT change in this entry:**
+- (M2) scope items other than catalog editor (sign-in, projects, project creation, transaction inspector, player search, API-key issuance, bootstrap-reason-codes) are unchanged.
+- (L1) cockpit-creates-projects, (I1) sidebar nav, (MK-COLOC) marketing colocation are unchanged.
+- Non-goals table is unchanged.
+
+---
+
 
 ## Decision
 
@@ -24,7 +50,7 @@ Cockpit at MVP launch covers **dashboard v1** scope per `[[mvp-feature-sequence]
 
 **(L1) Project lifecycle ownership — cockpit creates projects.** New backend handler `POST /v1/projects` behind `adminGate({ resource: 'project', actions: ['create'] })` cascades to slice 8.3.1 or downstream slice. Customer-developer creates dev / staging / prod projects via cockpit UI button. Production-cited B2B SaaS pattern (Stripe, Vercel Dashboard, Linear, Resend).
 
-**(I1) Information architecture — left sidebar nav.** Top-level sections: Projects (default), Catalog, Transactions, Players, Settings (per-project + org-level). Active-project switcher in header. Production-cited × 4 (Stripe Dashboard, Linear, Vercel Dashboard, Resend Dashboard all ship left-sidebar). Sidebar component lives at `apps/cockpit/components/layout/sidebar.tsx`; route segments map 1:1 to sections.
+**(I1) Information architecture — left sidebar nav.** Top-level sections: Projects (default), Catalog, Transactions, Players, Settings (per-project + org-level). Active-project switcher in header. Production-cited × 4 (Stripe Dashboard, Linear, Vercel Dashboard, Resend Dashboard all ship left-sidebar). Sidebar component lives at `apps/cockpit/components/layout/sidebar.tsx`; route segments map 1:1 to sections. **Amendment 2026-05-29:** the project-scoped sections (Catalog/Transactions/Players + per-project Settings) nest under the URL path `app/(app)/project/[projectId]/...` per `[[cockpit/active-project-scope]]` — active project is a **URL path segment**, not a cookie/session field (org stays on the Better Auth session); the header switcher `router.push`-es between project paths. Org-level pages (project list, org settings) sit at the authed root as siblings.
 
 **Marketing/landing page: colocated in cockpit Next.js app at MVP** (added 2026-05-11 per user pushback). Single marketing page lives at `apps/cockpit/app/(marketing)/page.tsx` (Next.js App Router route group). Served at apex domain `bokchoy.com/` via `export const dynamic = 'force-static'` for SEO + CDN cache. Sign Up CTA links to `/sign-in` in the same Next.js app — one deploy, one Vercel project, one apex domain. Sub-domain strategy: `bokchoy.com/` = cockpit (apex; serves both marketing route and auth-gated cockpit routes); `api.bokchoy.com/` = backend Hono per `[[cockpit-stack-integration-research]]` F1 reverse-proxy. **(MK-COLOC) rejected (MK-OUT-separate-workspace) and (MK-OUT-separate-repo)** on solo-dev MVP context — cost of separate workspace/stack/deploy buys nothing for one-page marketing surface. Production refs (Stripe / Vercel / Linear / Resend) split because they're at mature scale with dedicated marketing teams; BokChoy at MVP has ONE landing page. Revisit-when triggers listed below.
 

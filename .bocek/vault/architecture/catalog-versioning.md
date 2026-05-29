@@ -1,12 +1,31 @@
 ---
 type: decision
 features: [catalog, architecture]
-related: ["[[catalog-versioning-research]]", "[[wallet-mechanics]]", "[[idempotency-strategy]]", "[[mvp-feature-sequence]]", "[[wedge-decision]]", "[[catalog-cac-upgrade]]", "[[design-claims-register]]"]
+related: ["[[catalog-versioning-research]]", "[[catalog-mutation-mvp-shape]]", "[[architecture/.research/catalog-mutation-shape-at-indie-tier-research]]", "[[wallet-mechanics]]", "[[idempotency-strategy]]", "[[mvp-feature-sequence]]", "[[wedge-decision]]", "[[catalog-cac-upgrade]]", "[[design-claims-register]]"]
 created: 2026-05-02
-confidence: high
+confidence: medium
 ---
 
 # Catalog versioning: per-item Draft/Published states + ETag optimistic concurrency + linear `catalog_audit` log + per-project environment isolation, with bulk-publish + diff-view shipped at MVP and CaC upgrade documented as stub
+
+## Amendment 2026-05-28 — MVP-scope SUPERSEDED by [[catalog-mutation-mvp-shape]]
+
+**This entry's MVP-shipping claim no longer binds.** The T1+T2 heavyweight model (Draft/Published state machine + ETag + `catalog_audit` JSON-Patch log + M2 stored-function-only-interface + `catalog_items` unified-table-with-discriminator) is **scoped to upgrade-tier-not-MVP** as of 2026-05-28. The entry remains the canonical reference for the upgrade-tier shape; revisit conditions named in [[catalog-mutation-mvp-shape]] (named paying customer asks for catalog audit / draft-published / scheduled publish; stakeholder pivot away from indie wedge) trigger promotion back to MVP-binding.
+
+**Why amended.** [[architecture/.research/catalog-mutation-shape-at-indie-tier-research]] (2026-05-28) triangulated three game-economy backend cites at the indie/SMB tier (BokChoy's wedge per [[wedge-decision]]):
+- **F1:** Nakama Hiro Economy + LootLocker (the two wedge-tier class anchors per [[inventory/inventory-contract]] F2 and [[shop/.research/pricing-locus-research]] F1) ship **plain CRUD with `disabled`/`unavailable` boolean flags**. No Draft/Published state machine. PlayFab — the only big-platform cite in this entry that's actually game-economy class — does ship a rich state machine, but at the wrong tier for BokChoy's wedge.
+- **F3:** Catalog audit log is not class-idiomatic at indie tier. LootLocker exposes a `Last Changed` timestamp only with no operator identity / no content history; Hiro silent (git-as-audit via config-as-code). The PlayFab Item Status page surveyed is silent on per-item audit.
+- **F4:** ETag optimistic concurrency on catalog edits is not class-idiomatic at indie tier. This entry's PlayFab `ExecuteInventoryOperations` ETag cite (Reasoning §4) is a player-state primitive (transferred from [[wallet/.research/wallet-source-of-truth-research]] S2), NOT a catalog-state primitive — the cite is unverified for catalog edits and the catalog-state ETag claim should be treated as inferred until the open thread closes.
+- **F5:** Nakama Hiro's JSON-config-files-as-mutation-surface IS [[catalog-cac-upgrade]]'s T3 directly. **Hiro skipped T1+T2 entirely.** T3 is therefore an alternative starting position for the indie audience, not "advanced upgrade beyond T1+T2."
+
+**What was wrong with the original evidence.** This entry's cite list — PlayFab + LaunchDarkly + Beamable + Unity GS + Contentful — has two of five cites OUT-OF-CLASS for game economy (LaunchDarkly = feature flags; Contentful = CMS). The three game-class cites (PlayFab + Beamable + Unity GS) are all mid-to-large platform tier. The two wedge-tier class members (Nakama Hiro + LootLocker) — already vaulted elsewhere in this project as the audience anchors — were absent. The 2026-05-02 confidence: high stands for the bigger-platform-tier claim; it does not stand for the indie-tier MVP claim. Confidence downgraded `high → medium` (high evidence on what the bigger-platform tier ships; LOW evidence on what the wedge tier needs at MVP).
+
+**What this means for the body below.** Sections 1–9 of the *Decision* remain accurate **as the upgrade-tier shape**. The "ships at MVP" assertions in Section 8 (bulk-publish + bulk-scheduled-publish + diff-view) and Section 7 (24-month hot retention with no cold tier) are NOT MVP-binding as of 2026-05-28 — they read as "what ships at upgrade tier when the revisit trigger fires." The *Reasoning* and *Engineering substance applied* sections are unchanged at the upgrade-tier shape.
+
+**Cascade obligation closed:** [[architecture/catalog-cac-upgrade]] gets a parallel F5-reframing amendment (2026-05-28).
+
+---
+
 
 Resolves **CL-030** in `[[design-claims-register]]`. Falsifies DESIGN.md §12.3's "DAG semantics, branchable" framing per `[[catalog-versioning-research]]` F1 — replaced with the production-cited PlayFab-shape (Draft/Published states + multi-environment-via-project_id) plus a subset of T2 ergonomics that prepay the cost of T3 (CaC upgrade) without building T3 at MVP.
 

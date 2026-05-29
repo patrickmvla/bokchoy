@@ -1,7 +1,7 @@
 ---
 type: exploration
 features: [catalog, architecture]
-related: ["[[catalog-versioning]]", "[[catalog-versioning-research]]", "[[mvp-feature-sequence]]", "[[wedge-decision]]"]
+related: ["[[catalog-versioning]]", "[[catalog-versioning-research]]", "[[catalog-mutation-mvp-shape]]", "[[architecture/.research/catalog-mutation-shape-at-indie-tier-research]]", "[[mvp-feature-sequence]]", "[[wedge-decision]]"]
 created: 2026-05-02
 confidence: low
 status: deferred
@@ -10,6 +10,26 @@ status: deferred
 # Catalog Configuration-as-Code (CaC) upgrade — stub for the T3 upgrade path documented in `[[catalog-versioning-research]]`
 
 > **Status: deferred. Not built. Conditions for revisiting are recorded below.**
+
+## Amendment 2026-05-28 — T3 framing reframed (NOT "upgrade beyond T1+T2"; alternative starting position)
+
+This entry originally framed T3 as the upgrade tier above [[catalog-versioning]]'s T1+T2 heavyweight model — "customer-demand-triggered, not default MVP investment, reuses T1+T2 primitives." Per [[architecture/.research/catalog-mutation-shape-at-indie-tier-research]] F5, **Nakama Hiro Economy — the wedge-tier class anchor for BokChoy per [[wedge-decision]] — ships T3 directly and skipped T1+T2 entirely.** Hiro's `base-economy.json` JSON-config-files-edited-by-the-operator-in-git workflow IS T3, and Hiro never built T1+T2 underneath it.
+
+**Reframing:** T3 is not "upgrade beyond T1+T2." T3 is an alternative starting position for an indie audience that prefers git discipline over dashboard CRUD. The maturity-ladder framing (T1 → T2 → T3) was an artifact of the 2026-05-02 design seat treating PlayFab as the canonical shape; the wedge-tier picture is that T1+T2 and T3 are parallel options.
+
+**What stays valid in this entry:**
+- The shape description (CLI export/import, friendly_id as cross-project reference, git-driven branching, CI deploy) — accurate as T3's content.
+- Revisit conditions (paying customer requests git-driven workflow; cross-project promotion friction; team-size growth past 5 concurrent contributors; regulatory code-review requirement) — load-bearing trigger conditions for promoting T3 to a real decision.
+
+**What changes:**
+- "Why this is the upgrade path, not an MVP build" section header → "Why this is a deferred-but-parallel option, not an MVP default."
+- The phrase "T3 reuses T1+T2 primitives" — INVERTED. Hiro shows T3 needs no T1+T2 underneath. If BokChoy ships T3 in the future, it can layer over the [[catalog-mutation-mvp-shape]] plain-CRUD model directly (CLI emits CRUD calls against the existing tables).
+- Open thread #1 (schema versioning for JSON files) — still load-bearing if T3 is promoted; not a maturity-ladder artifact.
+
+**Bidirectional revisit:** if a customer asks for the T3 workflow at the same time as catalog audit history (V3-narrowed in [[catalog-mutation-mvp-shape]] Revisit), git history IS the audit log — same trigger fires both decisions. Audit log lives in customer's git, not in BokChoy's database. This is Hiro's pattern.
+
+---
+
 
 ## What this is
 
