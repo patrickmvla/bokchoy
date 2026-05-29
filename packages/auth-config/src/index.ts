@@ -14,6 +14,9 @@ export const statements = {
   project: ['create', 'read'],
   apiKey: ['create', 'revoke'],
   org: ['read'],
+  currency: ['read', 'create', 'update', 'delete'],
+  item: ['read', 'create', 'update', 'delete'],
+  offer: ['read', 'create', 'update', 'delete'],
 } as const;
 
 export const ac = createAccessControl(statements);
@@ -29,6 +32,9 @@ const adminRole = ac.newRole({
   project: ['create', 'read'],
   apiKey: ['create', 'revoke'],
   org: ['read'],
+  currency: ['read', 'create', 'update', 'delete'],
+  item: ['read', 'create', 'update', 'delete'],
+  offer: ['read', 'create', 'update', 'delete'],
 });
 
 const ownerRole = ac.newRole({
@@ -42,6 +48,9 @@ const ownerRole = ac.newRole({
   project: ['create', 'read'],
   apiKey: ['create', 'revoke'],
   org: ['read'],
+  currency: ['read', 'create', 'update', 'delete'],
+  item: ['read', 'create', 'update', 'delete'],
+  offer: ['read', 'create', 'update', 'delete'],
 });
 
 const memberRole = ac.newRole({

@@ -11,6 +11,7 @@ import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { AdminContext } from './admin';
 import { type ApiKeyContext, apiKeyMiddleware } from './auth';
+import { mountCatalogRoutes } from './catalog';
 import { mountCurrenciesRoutes } from './currencies';
 import { type IdempotencyContext, idempotencyMiddleware } from './idempotency';
 import { auth, db, errorMiddleware } from './infra';
@@ -81,6 +82,7 @@ mountCurrenciesRoutes(app);
 mountWalletRoutes(app);
 mountInventoryRoutes(app);
 mountShopRoutes(app);
+mountCatalogRoutes(app);
 
 app.onError(errorMiddleware);
 

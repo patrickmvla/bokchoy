@@ -31,6 +31,7 @@ export const items = pgTable(
     description: text('description'),
     stackable: boolean('stackable').notNull().default(true),
     maxCount: integer('max_count'),
+    active: boolean('active').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
