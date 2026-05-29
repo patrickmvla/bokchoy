@@ -1,11 +1,12 @@
 /** Better Auth factory. Static AC + role registry + trusted origins. Per [[admin-auth-surface]] D3+D5. */
 
-import type { Db } from '@bokchoy/db';
+import { type Db, member } from '@bokchoy/db';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { anonymous, bearer, organization } from 'better-auth/plugins';
 import { createAccessControl } from 'better-auth/plugins/access';
 import { defaultStatements as bauthStatements } from 'better-auth/plugins/organization/access';
+import { eq } from 'drizzle-orm';
 
 export const statements = {
   ...bauthStatements,
@@ -111,6 +112,27 @@ export function createAuth(opts: CreateAuthOptions) {
     },
     emailAndPassword: {
       enabled: true,
+    },
+    databaseHooks: {
+      session: {
+        create: {
+          // Set the operator's first org active on login so adminGate has org context.
+          // New users with no membership keep activeOrganizationId null → cockpit org-create step.
+          before: async (session) => {
+            const [firstOrg] = await opts.db
+              .select({ organizationId: member.organizationId })
+              .from(member)
+              .where(eq(member.userId, session.userId))
+              .limit(1);
+            return {
+              data: {
+                ...session,
+                activeOrganizationId: firstOrg?.organizationId ?? session.activeOrganizationId,
+              },
+            };
+          },
+        },
+      },
     },
     socialProviders: buildSocialProviders(),
     plugins: [anonymous(), organization({ ac, roles }), bearer()],
