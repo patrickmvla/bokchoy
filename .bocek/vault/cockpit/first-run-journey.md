@@ -8,6 +8,16 @@ confidence: high
 
 # Cockpit first-run journey: marketing → OAuth → org auto-create → project creation → API-key issuance → SDK verification loop
 
+## Amendment 2026-05-29 — false premise corrected: Better Auth does NOT auto-create an org; explicit org-create step adopted (supersedes O1's auto-create + the O2 rejection)
+
+Per `[[cockpit/.research/cockpit-admin-auth-runtime-research]]` F2 (Better Auth org-plugin docs, verified against `better-auth@1.6.9`): the org plugin **does not auto-create an organization on sign-in/sign-up** — `activeOrganizationId` simply defaults to `null`. The entry below repeatedly assumes "Better Auth auto-creates the org on first login" (step 3, the (O1) pick, the *First-class* note, and Alternative D's rejection of (O2)). **That premise is false.** Consequences, decided in `[[cockpit/admin-auth-onboarding]]`:
+
+- **(O1) auto-create-org is NOT a Better Auth default** — it never happened. A fresh login (OAuth or email) lands with no org → every adminGate endpoint returns BC400. This is the root cause of the cockpit admin surface being unreachable in the browser.
+- **(O2) explicit "Create Organization" step is ADOPTED** (formerly rejected as Alternative D). O2's rejection rested on the false premise; with no auto-create, the explicit step is the correct, OAuth-and-email-uniform choice.
+- **Active-org on return:** a `databaseHooks.session.create.before` hook sets `activeOrganizationId` to the operator's first org (so returning operators don't re-run the create step).
+
+Read the rest of this entry as the original (2026-05-11) design; the org-bootstrap mechanism is governed by `[[cockpit/admin-auth-onboarding]]` going forward.
+
 ## Decision
 
 Concrete step-by-step sequence from "user discovers BokChoy" to "user's first authenticated SDK call shows verified in cockpit." Eleven steps; nine cockpit-driven, two out-of-band (user's local SDK install + their first SDK call from game code).

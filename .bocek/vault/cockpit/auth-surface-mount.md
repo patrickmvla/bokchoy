@@ -62,6 +62,8 @@ Revisit-when triggers in `[[cockpit-stack-integration-research]]` F1: if (P1) is
 
 ### (T-multi) `packages/auth-config/src/index.ts` — `trustedOrigins` extension
 
+**Amendment 2026-05-29** (per `[[cockpit/admin-auth-onboarding]]` + `[[cockpit/.research/cockpit-admin-auth-runtime-research]]` F1): the `// local dev` entry below is `:3000` (the *backend* port), but the cockpit dev server runs on **`:3001`** and the browser's `Origin` is `http://localhost:3001` even through the same-origin rewrite proxy. Better Auth ≥1.4 validates that `Origin` against `trustedOrigins`, so `:3001` MUST be trusted in dev or org mutations (e.g. `set-active`) 403. Dev sets `BOKCHOY_TRUSTED_ORIGINS="http://localhost:3001,http://localhost:3000"` (the env **replaces** the constant; prod leaves it unset). (P1) "no CORS needed" is unaffected — the `trustedOrigins` origin check is a separate axis from browser CORS.
+
 ```ts
 // In createAuth options, alongside baseURL / database / etc:
 trustedOrigins: [
